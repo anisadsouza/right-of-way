@@ -1,0 +1,40 @@
+vision_model: models/vision_ev_mobilenet.tflite
+vision_labels: models/vision_labels.txt
+audio_model: models/audio_siren_classifier.joblib
+audio_labels: models/audio_labels.txt
+
+camera_index: 0
+frame_width: 640
+frame_height: 480
+vision_input_size: 224
+vision_every_n_frames: 2
+
+audio_sample_rate: 16000
+audio_window_seconds: 1.0
+audio_hop_seconds: 0.5
+audio_mfcc_count: 40
+
+fusion:
+  visual_weight: 0.6
+  audio_weight: 0.4
+  emergency_threshold: 0.80
+  clear_threshold: 0.45
+  trigger_frames: 4
+  clear_seconds: 3.0
+
+serial:
+  enabled: false
+  port: /dev/ttyUSB0
+  baudrate: 115200
+
+controller:
+  mode: print   # print, serial, or gpio
+  gpio_pins:
+    green: 17
+    yellow: 27
+    red: 22
+    buzzer: 23
+
+demo:
+  show_window: true
+  log_csv: logs/realtime_log.csv
