@@ -131,11 +131,17 @@ python -m evr.evaluate_logs logs/demo_simulation_log.csv
 
 ## ESP32 Connection
 
-1. Open `firmware/esp32_yield_controller/esp32_yield_controller.ino` in Arduino IDE.
-2. Install the `ESP32Servo` library.
-3. Select your ESP32 board and upload.
+For your selected hardware, use the simple traffic-light firmware:
+
+```text
+firmware/esp32_traffic_light/esp32_traffic_light.ino
+```
+
+1. Open that file in Arduino IDE.
+2. Select your ESP32 board.
+3. Upload the sketch.
 4. Connect ESP32 USB to Raspberry Pi.
-5. Set serial in `config.yaml`:
+5. Use `config_esp32.yaml` when running the Python code.
 
 ```yaml
 serial:
@@ -146,21 +152,16 @@ serial:
 
 If your ESP32 appears as `/dev/ttyACM0`, update the port.
 
-For your selected hardware, use ESP32 serial control:
-
-```yaml
-controller:
-  mode: serial
-```
-
 Test the controller before running AI:
 
 ```bash
 python -m evr.test_controller --config config.yaml --mode print
-python -m evr.test_controller --config config.yaml --mode serial
+python -m evr.test_controller --config config_esp32.yaml --mode serial
 ```
 
 If you skip ESP32 and connect LEDs directly to Raspberry Pi GPIO later, set `controller.mode` to `gpio`.
+
+Detailed wiring is in `docs/WIRING.md`.
 
 ## Fusion Logic
 
