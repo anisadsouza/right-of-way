@@ -44,6 +44,7 @@ class AppConfig:
     audio_model: Path
     audio_labels: Path
     camera_index: int
+    camera_backend: str
     frame_width: int
     frame_height: int
     vision_input_size: int
@@ -51,6 +52,7 @@ class AppConfig:
     audio_sample_rate: int
     audio_window_seconds: float
     audio_hop_seconds: float
+    audio_device: int | str | None
     audio_mfcc_count: int
     fusion: FusionConfig
     serial: SerialConfig
@@ -88,6 +90,7 @@ def load_config(path: str | Path) -> AppConfig:
         audio_model=_path(base_dir, raw["audio_model"]),
         audio_labels=_path(base_dir, raw["audio_labels"]),
         camera_index=int(raw["camera_index"]),
+        camera_backend=str(raw.get("camera_backend", "auto")).lower(),
         frame_width=int(raw["frame_width"]),
         frame_height=int(raw["frame_height"]),
         vision_input_size=int(raw["vision_input_size"]),
@@ -95,6 +98,7 @@ def load_config(path: str | Path) -> AppConfig:
         audio_sample_rate=int(raw["audio_sample_rate"]),
         audio_window_seconds=float(raw["audio_window_seconds"]),
         audio_hop_seconds=float(raw["audio_hop_seconds"]),
+        audio_device=raw.get("audio_device"),
         audio_mfcc_count=int(raw["audio_mfcc_count"]),
         fusion=FusionConfig(
             visual_weight=float(fusion["visual_weight"]),
@@ -158,6 +162,8 @@ def _split_yaml_line(line: str) -> tuple[str, str | None]:
 
 def _coerce_value(value: str) -> Any:
     lowered = value.lower()
+    if lowered in {"null", "none", "~"}:
+        return None
     if lowered == "true":
         return True
     if lowered == "false":
