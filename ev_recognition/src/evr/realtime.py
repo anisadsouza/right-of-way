@@ -25,11 +25,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audio", type=Path, help="Optional audio file instead of microphone.")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio classifier.")
     parser.add_argument("--no-vision", action="store_true", help="Disable vision classifier.")
+    parser.add_argument("--list-audio-devices", action="store_true", help="Print available microphone devices and exit.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.list_audio_devices:
+        print(sd.query_devices())
+        return
     config = load_config(args.config)
 
     vision = None
@@ -63,11 +67,9 @@ def main() -> None:
         config.controller.buzzer_pin,
     )
     logger = CsvLogger(config.log_csv)
-    audio_source = AudioSource(config.audio_sample_rate, config.audio_window_seconds, args.audio)
+    audio_source = AudioSource(config.audio_sample_rate, config.audio_window_seconds, args.audio, config.audio_device)
 
-    cap = cv2.VideoCapture(str(args.video) if args.video else config.camera_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.frame_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.frame_height)
+    cap = open_camera(args.video, config.camera_backend, config.camera_index, config.frame_width, config.frame_height)
     if not cap.isOpened():
         raise SystemExit("Could not open camera/video source.")
 
@@ -131,10 +133,11 @@ def main() -> None:
 
 
 class AudioSource:
-    def __init__(self, sample_rate: int, window_seconds: float, audio_file: Path | None) -> None:
+    def __init__(self, sample_rate: int, window_seconds: float, audio_file: Path | None, device: int | str | None) -> None:
         self.sample_rate = sample_rate
         self.window = int(sample_rate * window_seconds)
         self.audio_file = audio_file
+        self.device = device
         self.queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=2)
         self.stream: sd.InputStream | None = None
         self.thread: threading.Thread | None = None
@@ -150,6 +153,7 @@ class AudioSource:
             samplerate=self.sample_rate,
             channels=1,
             blocksize=self.window,
+            device=self.device,
             callback=self._mic_callback,
         )
         self.stream.start()
@@ -198,6 +202,47 @@ class AudioSource:
             except queue.Empty:
                 pass
         self.queue.put_nowait(chunk)
+
+
+def open_camera(video: Path | None, backend: str, camera_index: int, width: int, height: int):
+    if video is not None:
+        cap = cv2.VideoCapture(str(video))
+    elif backend in {"auto", "picamera2"}:
+        try:
+            from picamera2 import Picamera2
+
+            camera = Picamera2()
+            camera.configure(camera.create_video_configuration(main={"size": (width, height), "format": "BGR888"}))
+            camera.start()
+            return PiCameraCapture(camera)
+        except ImportError:
+            if backend == "picamera2":
+                raise SystemExit("Picamera2 is not installed. On Raspberry Pi OS run: sudo apt install python3-picamera2")
+        except Exception as error:
+            if backend == "picamera2":
+                raise SystemExit(f"Could not start Pi Camera: {error}")
+            print(f"Pi Camera unavailable; trying OpenCV camera: {error}")
+        cap = cv2.VideoCapture(camera_index)
+    else:
+        cap = cv2.VideoCapture(camera_index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    return cap
+
+
+class PiCameraCapture:
+    """cv2.VideoCapture-compatible adapter for Raspberry Pi Camera Module."""
+    def __init__(self, camera) -> None:
+        self.camera = camera
+
+    def isOpened(self) -> bool:
+        return True
+
+    def read(self):
+        return True, self.camera.capture_array()
+
+    def release(self) -> None:
+        self.camera.stop()
 
 
 def draw_overlay(frame, vision, audio, fused: float, state: str, side: str) -> None:
