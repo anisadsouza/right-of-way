@@ -6,7 +6,17 @@ __pycache__/
 models/*.keras
 models/*.tflite
 models/*.joblib
+models/*.h5
+models/*.onnx
 logs/*.csv
 data/images/*/
 data/audio/*/
+data/import_manifest.json
+data/roboflow_vision_manifest.json
+reports/*.json
+reports/*.csv
+.env
+.vscode/
 .DS_Store
+# Raw downloaded datasets, not meant for version control
+raw_datasets/
