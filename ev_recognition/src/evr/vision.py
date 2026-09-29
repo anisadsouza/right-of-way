@@ -20,13 +20,13 @@ class VisionClassifier:
     def predict(self, frame_bgr: np.ndarray) -> tuple[str, float, float]:
         image = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         image = cv2.resize(image, (self.input_size, self.input_size))
-        image = image.astype(np.float32) / 255.0
-        batch = np.expand_dims(image, axis=0)
+        # The exported Keras model contains MobileNetV2's preprocessing layer,
+        # so float models expect RGB pixels in the original 0..255 range.
+        batch = np.expand_dims(image.astype(np.float32), axis=0)
 
         if self.input_dtype == np.uint8:
             scale, zero_point = self.input_details[0]["quantization"]
-            batch = batch / scale + zero_point
-            batch = batch.astype(np.uint8)
+            batch = np.clip(np.round(batch / scale + zero_point), 0, 255).astype(np.uint8)
 
         self.interpreter.set_tensor(self.input_details[0]["index"], batch)
         self.interpreter.invoke()
