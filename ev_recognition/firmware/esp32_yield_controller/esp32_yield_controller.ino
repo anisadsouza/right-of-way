@@ -1,92 +1,89 @@
 /*
-  Emergency Vehicle Recognition - ESP32 yield controller
+  Emergency Vehicle Recognition - ESP32 4WD yield controller
 
-  Serial commands from Raspberry Pi:
-    NORMAL     green LED, normal drive
-    SLOW       yellow LED, reduced motor speed
-    PULL_RIGHT yellow + red LED, steer/pull right
-    STOP       red LED, motors stopped
+  Hardware: ESP32-DevKitC, L298N, four DC motors wired as left pair/right pair,
+  active buzzer, and 5 V traffic-light module. The Pi sends commands through
+  the ESP32 USB cable, one command per line: NORMAL, SLOW, PULL_RIGHT, STOP.
+
+  The controller starts stopped. Test it with the wheels raised first.
 */
 
 #include <Arduino.h>
-#include <ESP32Servo.h>
 
-const int GREEN_LED = 25;
-const int YELLOW_LED = 26;
-const int RED_LED = 27;
-const int BUZZER = 14;
+const int GREEN_LED = 32;
+const int YELLOW_LED = 33;
+const int RED_LED = 23;
+const int BUZZER = 4;
 
-const int LEFT_PWM = 18;
-const int LEFT_IN1 = 19;
-const int LEFT_IN2 = 21;
-const int RIGHT_PWM = 5;
-const int RIGHT_IN1 = 17;
-const int RIGHT_IN2 = 16;
-const int SERVO_PIN = 13;
+// L298N: OUT1/OUT2 -> both left motors, OUT3/OUT4 -> both right motors.
+const int LEFT_ENABLE = 25;  // Remove L298N ENA jumper for PWM control.
+const int LEFT_IN1 = 26;
+const int LEFT_IN2 = 27;
+const int RIGHT_ENABLE = 14; // Remove L298N ENB jumper for PWM control.
+const int RIGHT_IN3 = 18;
+const int RIGHT_IN4 = 19;
 
-const int PWM_FREQ = 1000;
+const int PWM_FREQUENCY = 1000;
 const int PWM_RESOLUTION = 8;
-const int LEFT_CH = 0;
-const int RIGHT_CH = 1;
+const int LEFT_PWM_CHANNEL = 0;
+const int RIGHT_PWM_CHANNEL = 1;
 
-Servo steering;
-
-void setDrive(int leftSpeed, int rightSpeed);
 void setLights(bool green, bool yellow, bool red);
+void drive(int leftSpeed, int rightSpeed);
+void stopMotors();
 void handleCommand(String command);
 
 void setup() {
   Serial.begin(115200);
-
   pinMode(GREEN_LED, OUTPUT);
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
   pinMode(BUZZER, OUTPUT);
   pinMode(LEFT_IN1, OUTPUT);
   pinMode(LEFT_IN2, OUTPUT);
-  pinMode(RIGHT_IN1, OUTPUT);
-  pinMode(RIGHT_IN2, OUTPUT);
-
-  ledcSetup(LEFT_CH, PWM_FREQ, PWM_RESOLUTION);
-  ledcSetup(RIGHT_CH, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(LEFT_PWM, LEFT_CH);
-  ledcAttachPin(RIGHT_PWM, RIGHT_CH);
-
-  steering.attach(SERVO_PIN);
-  handleCommand("NORMAL");
+  pinMode(RIGHT_IN3, OUTPUT);
+  pinMode(RIGHT_IN4, OUTPUT);
+  ledcSetup(LEFT_PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION);
+  ledcSetup(RIGHT_PWM_CHANNEL, PWM_FREQUENCY, PWM_RESOLUTION);
+  ledcAttachPin(LEFT_ENABLE, LEFT_PWM_CHANNEL);
+  ledcAttachPin(RIGHT_ENABLE, RIGHT_PWM_CHANNEL);
+  handleCommand("STOP");
+  Serial.println("EVR ESP32 4WD controller ready");
 }
 
 void loop() {
-  if (Serial.available()) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-    command.toUpperCase();
-    handleCommand(command);
-  }
+  if (!Serial.available()) return;
+  String command = Serial.readStringUntil('\n');
+  command.trim();
+  command.toUpperCase();
+  handleCommand(command);
 }
 
 void handleCommand(String command) {
   if (command == "NORMAL") {
     setLights(true, false, false);
-    noTone(BUZZER);
-    steering.write(90);
-    setDrive(160, 160);
+    digitalWrite(BUZZER, LOW);
+    drive(160, 160);
   } else if (command == "SLOW") {
     setLights(false, true, false);
-    tone(BUZZER, 1200, 120);
-    steering.write(90);
-    setDrive(85, 85);
+    digitalWrite(BUZZER, HIGH);
+    drive(90, 90);
   } else if (command == "PULL_RIGHT") {
+    // Differential drive: left side moves faster, producing a right arc.
     setLights(false, true, true);
-    tone(BUZZER, 1500, 150);
-    steering.write(125);
-    setDrive(75, 45);
+    digitalWrite(BUZZER, HIGH);
+    drive(110, 35);
   } else if (command == "STOP") {
     setLights(false, false, true);
-    tone(BUZZER, 900, 250);
-    steering.write(90);
-    setDrive(0, 0);
+    digitalWrite(BUZZER, HIGH);
+    stopMotors();
+  } else {
+    Serial.print("Unknown command: ");
+    Serial.println(command);
+    return;
   }
+  Serial.print("OK ");
+  Serial.println(command);
 }
 
 void setLights(bool green, bool yellow, bool red) {
@@ -95,11 +92,20 @@ void setLights(bool green, bool yellow, bool red) {
   digitalWrite(RED_LED, red ? HIGH : LOW);
 }
 
-void setDrive(int leftSpeed, int rightSpeed) {
-  digitalWrite(LEFT_IN1, leftSpeed > 0 ? HIGH : LOW);
+void drive(int leftSpeed, int rightSpeed) {
+  digitalWrite(LEFT_IN1, leftSpeed >= 0 ? HIGH : LOW);
+  digitalWrite(LEFT_IN2, leftSpeed >= 0 ? LOW : HIGH);
+  digitalWrite(RIGHT_IN3, rightSpeed >= 0 ? HIGH : LOW);
+  digitalWrite(RIGHT_IN4, rightSpeed >= 0 ? LOW : HIGH);
+  ledcWrite(LEFT_PWM_CHANNEL, constrain(abs(leftSpeed), 0, 255));
+  ledcWrite(RIGHT_PWM_CHANNEL, constrain(abs(rightSpeed), 0, 255));
+}
+
+void stopMotors() {
+  digitalWrite(LEFT_IN1, LOW);
   digitalWrite(LEFT_IN2, LOW);
-  digitalWrite(RIGHT_IN1, rightSpeed > 0 ? HIGH : LOW);
-  digitalWrite(RIGHT_IN2, LOW);
-  ledcWrite(LEFT_CH, constrain(abs(leftSpeed), 0, 255));
-  ledcWrite(RIGHT_CH, constrain(abs(rightSpeed), 0, 255));
+  digitalWrite(RIGHT_IN3, LOW);
+  digitalWrite(RIGHT_IN4, LOW);
+  ledcWrite(LEFT_PWM_CHANNEL, 0);
+  ledcWrite(RIGHT_PWM_CHANNEL, 0);
 }
