@@ -46,12 +46,17 @@ KEYWORD_RULES = [
     ("vehicle", "normal"),
 ]
 
-IGNORE_CATEGORIES = {"road_sign", "writing", "hose", "lamp", "symbol"}
+EXACT_IGNORE = {
+    "writing",
+    "road_sign",
+    "horse",
+    "nonemergency-9m2i-qxld-nonemergency-bvjf",
+}
 
 
 def classify_category(name: str):
     name_lower = name.lower()
-    if any(ignored in name_lower for ignored in IGNORE_CATEGORIES):
+    if name_lower in EXACT_IGNORE:
         return None
     for keyword, target in KEYWORD_RULES:
         if keyword in name_lower:
