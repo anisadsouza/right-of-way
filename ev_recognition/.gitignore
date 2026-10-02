@@ -20,3 +20,6 @@ reports/*.csv
 .DS_Store
 # Raw downloaded datasets, not meant for version control
 raw_datasets/
+
+*_output.txt
+*.egg-info/
