@@ -28,6 +28,23 @@ The system combines:
 - Solderless Breadboard
 - Jumper Wires
 
+## Dataset Status 
+
+### Vision
+- Sources: Roboflow "Indian Emergency Vehicles" (COCO format), Kaggle vehicle classification dataset (normal class)
+- Final dataset: 26,763 unique images after deduplication (5,964 duplicates removed)
+- Class distribution: normal 16,932, ambulance 6,159, police 2,835, fire_truck 837
+- Model: MobileNetV2, alpha 0.35, 160x160 input
+- Validation accuracy: 88.25% (target: 93%)
+- Status: below target, likely due to fire_truck class imbalance; retraining with alpha 0.5 / 192x192 and additional fire_truck images planned
+
+### Audio
+- Source: Kaggle emergency vehicle siren dataset (ambulance, firetruck -> siren; traffic -> ambient)
+- Final dataset: 596 unique audio files after deduplication (1,204 duplicates removed), 396 siren / 200 ambient
+- Model: MFCC features (40 coefficients) + Random Forest
+- Verified accuracy: 99.40% mean across 5-fold grouped cross-validation (SD 1.04%)
+- Status: complete
+
 ## Project Structure
 
 The complete implementation is available inside the [`ev_recognition`](./ev_recognition) directory.
