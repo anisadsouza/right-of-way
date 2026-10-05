@@ -1,3 +1,6 @@
+*_output.txt
+*.egg-info/
+
 .venv/
 __pycache__/
 *.pyc
@@ -20,6 +23,6 @@ reports/*.csv
 .DS_Store
 # Raw downloaded datasets, not meant for version control
 raw_datasets/
-
 *_output.txt
 *.egg-info/
+data/images_excluded/
