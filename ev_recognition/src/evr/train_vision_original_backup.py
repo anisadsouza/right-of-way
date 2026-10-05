@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 from pathlib import Path
 
 import tensorflow as tf
@@ -21,59 +20,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_datasets(data_dir: Path, img_size: int, batch_size: int, seed: int = 42, val_split: float = 0.2):
-    """
-    Builds train/validation datasets with a PER-CLASS stratified split, so every
-    class is guaranteed to be represented proportionally in both sets, regardless
-    of folder read order or class size. This replaces image_dataset_from_directory's
-    built-in split, which was observed to take a contiguous slice of the
-    class-ordered file list rather than a true shuffled split across all classes.
-    """
-    class_dirs = sorted([p for p in data_dir.iterdir() if p.is_dir()])
-    labels = [p.name for p in class_dirs]
-    valid_ext = {".jpg", ".jpeg", ".png", ".bmp"}
-
-    train_paths, train_labels = [], []
-    val_paths, val_labels = [], []
-    rng = random.Random(seed)
-
-    for class_idx, class_dir in enumerate(class_dirs):
-        files = sorted(str(p) for p in class_dir.iterdir() if p.is_file() and p.suffix.lower() in valid_ext)
-        rng.shuffle(files)
-        n_val = max(1, int(len(files) * val_split))
-        val_files = files[:n_val]
-        train_files = files[n_val:]
-        val_paths.extend(val_files)
-        val_labels.extend([class_idx] * len(val_files))
-        train_paths.extend(train_files)
-        train_labels.extend([class_idx] * len(train_files))
-
-    def load(path, label):
-        img = tf.io.read_file(path)
-        img = tf.io.decode_image(img, channels=3, expand_animations=False)
-        img.set_shape([None, None, 3])
-        img = tf.image.resize(img, (img_size, img_size))
-        return img, label
-
-    def make_ds(paths, labs, shuffle):
-        ds = tf.data.Dataset.from_tensor_slices((paths, labs))
-        if shuffle:
-            ds = ds.shuffle(buffer_size=len(paths), seed=seed, reshuffle_each_iteration=True)
-        ds = ds.map(load, num_parallel_calls=tf.data.AUTOTUNE)
-        ds = ds.batch(batch_size)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
-        return ds
-
-    train_ds = make_ds(train_paths, train_labels, shuffle=True)
-    val_ds = make_ds(val_paths, val_labels, shuffle=False)
-
-    print("Stratified split check (should be nonzero for every class on both sides):")
-    for idx, name in enumerate(labels):
-        print(f"  {name}: {train_labels.count(idx)} train, {val_labels.count(idx)} val")
-
-    return train_ds, val_ds, labels
-
-
 def main() -> None:
     args = parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -81,7 +27,23 @@ def main() -> None:
     if len(class_dirs) < 2:
         raise SystemExit("Put images in at least two labelled folders under data/images.")
 
-    train_ds, val_ds, labels = build_datasets(args.data, args.img_size, args.batch_size)
+    train_ds = tf.keras.utils.image_dataset_from_directory(
+        args.data,
+        validation_split=0.2,
+        subset="training",
+        seed=42,
+        image_size=(args.img_size, args.img_size),
+        batch_size=args.batch_size,
+    )
+    val_ds = tf.keras.utils.image_dataset_from_directory(
+        args.data,
+        validation_split=0.2,
+        subset="validation",
+        seed=42,
+        image_size=(args.img_size, args.img_size),
+        batch_size=args.batch_size,
+    )
+    labels = train_ds.class_names
     (args.out / "vision_labels.txt").write_text("\n".join(labels) + "\n", encoding="utf-8")
 
     augmentation = tf.keras.Sequential(
@@ -145,4 +107,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    
