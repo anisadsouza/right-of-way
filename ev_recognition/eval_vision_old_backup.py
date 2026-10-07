@@ -1,33 +1,34 @@
 """
-eval_vision.py (corrected)
+eval_vision.py
 
-Evaluates the trained vision model per-class, using the EXACT same
-stratified train/validation split that train_vision.py used, by
-importing its build_datasets() function directly rather than
-reimplementing the split separately. This guarantees the validation
-set tested here matches the one the model was actually trained against.
+Loads the trained vision model and evaluates it per-class on the exact
+same validation split train_vision.py used (same seed, same ratio),
+so this is a true measurement, not a re-guess at the split.
 
 Run from inside ev_recognition/, with your venv active:
     python eval_vision.py
 """
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
 
-sys.path.insert(0, "src")
-from evr.train_vision import build_datasets  # reuse the real, fixed split logic
-
 IMG_SIZE = 192          # must match the --img-size used in your last training run
-DATA_DIR = Path("data/images")
+DATA_DIR = "data/images"
 MODEL_PATH = "models/vision_ev_mobilenet.keras"
 
-_, val_ds, labels = build_datasets(DATA_DIR, IMG_SIZE, batch_size=32, seed=42, val_split=0.2)
+val_ds = tf.keras.utils.image_dataset_from_directory(
+    DATA_DIR,
+    validation_split=0.2,
+    subset="validation",
+    seed=42,
+    image_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=32,
+    shuffle=False,
+)
 
-print("\nClasses:", labels)
+labels = val_ds.class_names
+print("Classes:", labels)
 
 model = tf.keras.models.load_model(MODEL_PATH)
 
