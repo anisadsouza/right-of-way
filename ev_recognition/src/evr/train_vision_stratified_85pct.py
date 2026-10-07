@@ -18,9 +18,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=0.35, help="MobileNet width; 0.35 is suitable for Pi 4 (2 GB).")
     parser.add_argument("--weights", choices=("imagenet", "none"), default="imagenet", help="Use ImageNet transfer-learning weights or train offline from scratch.")
     parser.add_argument("--report", type=Path, default=Path("reports/vision_training_metrics.json"))
-    parser.add_argument("--finetune-epochs", type=int, default=8, help="Extra epochs with part of the base unfrozen. Set to 0 to skip fine-tuning.")
-    parser.add_argument("--finetune-layers", type=int, default=30, help="Number of layers counted from the end of the base model to unfreeze for fine-tuning.")
-    parser.add_argument("--finetune-lr", type=float, default=0.00008, help="Learning rate for the fine-tuning phase, kept low to avoid destroying pretrained features.")
     return parser.parse_args()
 
 
@@ -28,7 +25,9 @@ def build_datasets(data_dir: Path, img_size: int, batch_size: int, seed: int = 4
     """
     Builds train/validation datasets with a PER-CLASS stratified split, so every
     class is guaranteed to be represented proportionally in both sets, regardless
-    of folder read order or class size.
+    of folder read order or class size. This replaces image_dataset_from_directory's
+    built-in split, which was observed to take a contiguous slice of the
+    class-ordered file list rather than a true shuffled split across all classes.
     """
     class_dirs = sorted([p for p in data_dir.iterdir() if p.is_dir()])
     labels = [p.name for p in class_dirs]
@@ -119,28 +118,7 @@ def main() -> None:
     callbacks = [
         tf.keras.callbacks.EarlyStopping(monitor="val_accuracy", patience=4, restore_best_weights=True),
     ]
-    print("\n=== Phase 1: training classifier head, base frozen ===")
     history = model.fit(train_ds, validation_data=val_ds, epochs=args.epochs, callbacks=callbacks)
-
-    finetune_history = None
-    if args.weights == "imagenet" and args.finetune_epochs > 0:
-        print(f"\n=== Phase 2: fine-tuning, unfreezing last {args.finetune_layers} base layers ===")
-        base.trainable = True
-        for layer in base.layers[: -args.finetune_layers]:
-            layer.trainable = False
-
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=args.finetune_lr),
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"],
-        )
-        finetune_callbacks = [
-            tf.keras.callbacks.EarlyStopping(monitor="val_accuracy", patience=4, restore_best_weights=True),
-        ]
-        finetune_history = model.fit(
-            train_ds, validation_data=val_ds, epochs=args.finetune_epochs, callbacks=finetune_callbacks
-        )
-
     loss, accuracy = model.evaluate(val_ds, verbose=0)
 
     keras_path = args.out / "vision_ev_mobilenet.keras"
@@ -151,29 +129,20 @@ def main() -> None:
     tflite = converter.convert()
     (args.out / "vision_ev_mobilenet.tflite").write_bytes(tflite)
     args.report.parent.mkdir(parents=True, exist_ok=True)
-
     metrics = {
         "labels": labels,
         "image_size": args.img_size,
         "mobilenet_alpha": args.alpha,
         "initial_weights": args.weights,
-        "epochs_completed_phase1": len(history.history["loss"]),
-        "epochs_completed_phase2_finetune": len(finetune_history.history["loss"]) if finetune_history else 0,
-        "finetune_layers_unfrozen": args.finetune_layers if finetune_history else 0,
-        "finetune_lr": args.finetune_lr if finetune_history else None,
+        "epochs_completed": len(history.history["loss"]),
         "validation_loss": float(loss),
         "validation_accuracy": float(accuracy),
-        "history_phase1": {key: [float(value) for value in values] for key, values in history.history.items()},
-        "history_phase2_finetune": (
-            {key: [float(value) for value in values] for key, values in finetune_history.history.items()}
-            if finetune_history
-            else None
-        ),
+        "history": {key: [float(value) for value in values] for key, values in history.history.items()},
     }
     args.report.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-    print(f"\nSaved {keras_path} and TFLite model in {args.out}")
-    print(f"Final validation accuracy after fine-tuning: {accuracy:.4f}")
+    print(f"Saved {keras_path} and TFLite model in {args.out}")
 
 
 if __name__ == "__main__":
-    main()   
+    main()
+    
