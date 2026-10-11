@@ -7,7 +7,7 @@ camera_index: 0
 camera_backend: auto
 frame_width: 640
 frame_height: 480
-vision_input_size: 160
+vision_input_size: 192
 vision_every_n_frames: 2
 
 audio_sample_rate: 16000
