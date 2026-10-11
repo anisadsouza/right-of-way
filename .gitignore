@@ -1,0 +1,27 @@
+# Local editor settings
+.vscode/
+
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Generated build output at the workspace root
+/build/
+
+# Python virtual environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example

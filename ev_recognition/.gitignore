@@ -1,28 +1,56 @@
 *_output.txt
 *.egg-info/
 
+# Python environment and cache files
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
+
+# Trained model files
 models/*.keras
 models/*.tflite
 models/*.joblib
 models/*.h5
 models/*.onnx
+
+# Generated logs and reports
 logs/*.csv
+reports/*.json
+reports/*.csv
+/emergency_output.txt
+
+# Dataset files not intended for version control
 data/images/*/
 data/audio/*/
 data/import_manifest.json
 data/roboflow_vision_manifest.json
-reports/*.json
-reports/*.csv
+data/images_excluded/
+raw_datasets/
+
+# Local environment and editor files
 .env
 .vscode/
 .DS_Store
-# Raw downloaded datasets, not meant for version control
-raw_datasets/
-*_output.txt
-*.egg-info/
-data/images_excluded/
+
+# Demo media
+demo/*.mp4
+demo/*.wav
+
+# ESP-IDF generated build files
+/firmware/evr_esp_idf/build/
+/firmware/evr_esp_idf/sdkconfig
+/firmware/evr_esp_idf/sdkconfig.old
+/firmware/evr_esp_idf/.bin_timestamp
+/firmware/evr_esp_idf/.ninja_deps
+/firmware/evr_esp_idf/.ninja_log
+/firmware/evr_esp_idf/app-flash_args
+/firmware/evr_esp_idf/bootloader-flash_args
+/firmware/evr_esp_idf/build.ninja
+/firmware/evr_esp_idf/CMakeCache.txt
+/firmware/evr_esp_idf/cmake_install.cmake
+/firmware/evr_esp_idf/compile_commands.json
+/firmware/evr_esp_idf/components_with_manifests_list.txt
+/firmware/evr_esp_idf/config.env
+/firmware/evr_esp_idf/managed_components/
