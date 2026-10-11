@@ -4,6 +4,18 @@ A multimodal emergency vehicle recognition system for a 4WD yield rover. A camer
 
 The full implementation is in [`ev_recognition`](./ev_recognition).
 
+## Faculty Results At A Glance
+
+| Item | Measured result | Meaning |
+| --- | --- | --- |
+| Vision model | **92.14%** validation accuracy on **1,667 images** | Below the 93% target; the result is reported honestly. |
+| Vision safety-relevant result | Ambulance recall **88.00%** | Ambulances were missed as normal in 42 of 500 validation images. |
+| Audio model | **95.01%** held-out-window accuracy on **1,103 windows** | Clean-dataset result, not a live motor-noise measurement. |
+| Fusion simulation at threshold 0.80 | **0/196** non-siren clips stopped; **3-5/8** siren clips stopped | The current threshold is provisional, not a final safety setting. |
+| Recorded ambulance clips | Both reached `NORMAL -> SLOW -> PULL_OVER -> STOPPED` | Confirms offline software integration and command generation. |
+
+For the board-level deployment procedure, code map, and exact Pi command, see [Raspberry Pi Deployment](./ev_recognition/docs/PI_DEPLOYMENT.md). For power, sensor, L298N, LED, and buzzer connections, see [Wiring](./ev_recognition/docs/WIRING.md).
+
 ## Current Status
 
 | Area | Status |
@@ -11,9 +23,9 @@ The full implementation is in [`ev_recognition`](./ev_recognition).
 | Vision dataset sourcing, cleaning, rebalancing | Complete |
 | Vision model | Trained, 92.14% validation accuracy (target 93%, not yet met) |
 | Audio dataset sourcing and cleaning | Complete |
-| Audio model | Trained, 99.40% mean 5-fold grouped cross-validation |
-| Fusion and yield state machine (code) | Written; passed a synthetic progression test and ran on recorded clips, see Section 7 |
-| ESP32 firmware (code) | Arduino-framework `.ino` written; not flashed. Being ported to native ESP-IDF (install not yet verified) |
+| Audio model | Trained, 95.01% held-out-window accuracy; external audio checks documented below |
+| Fusion and yield state machine (code) | Written; exercised against recorded clips and ESC-50 audio simulation, see Sections 4.2 and 7 |
+| ESP32 firmware (code) | Arduino `.ino` and ESP-IDF project present; not flashed or bench-tested on the rover |
 | Chassis, soldering, motors | Assembled and connected |
 | L298N, ESP32, LED, buzzer wiring and bench tests | Not started |
 | Raspberry Pi, camera, microphone integration | Not started |
@@ -151,18 +163,18 @@ The largest remaining errors are ambulance predicted as normal (42), police pred
 
 ### 4.2 Audio
 
-40 MFCC features, 16 kHz, 1 second windows with 0.5 second hop. Random Forest (250 trees, maximum depth 14, balanced class weights). Windows from the same source file are kept on the same side of every split.
+The deployed V3 model uses 40 MFCC features from 16 kHz, one-second windows and a Random Forest classifier. Its saved held-out evaluation contains 1,103 windows: 600 ambient and 45 ambient windows were classified incorrectly, while 448 of 458 siren windows were classified correctly. Overall held-out window accuracy is **95.01%**. This is a model-window metric, not a vehicle-level safety result.
 
-The first single train/test split scored 100%, which was treated as unreliable. The check was repeated with 5-fold grouped cross-validation:
+An independent ESC-50 check uses 980 non-siren windows and 40 external-siren windows. At the current `0.80` score threshold, 0.20% of non-siren windows and 27.50% of siren windows met the threshold. The fusion state-machine simulation below is more useful than window score alone because it includes multi-frame confirmation.
 
-| Fold | Accuracy |
-| --- | --- |
-| 1 | 99.83% |
-| 2 | 100% |
-| 3 | 99.83% |
-| 4 | 100% |
-| 5 | 97.31% |
-| Mean | 99.40% (SD 1.04%) |
+| Scenario | Updates/s | Non-siren clips stopped | Siren clips stopped |
+| --- | ---: | ---: | ---: |
+| Audio only, threshold 0.80 | 6 | 0 / 196 | 4 / 8 |
+| Audio only, threshold 0.80 | 15 | 0 / 196 | 5 / 8 |
+| Vision score 0.10 plus audio, threshold 0.80 | 6 | 0 / 196 | 3 / 8 |
+| Vision score 0.10 plus audio, threshold 0.80 | 15 | 0 / 196 | 3 / 8 |
+
+`0.80` is a **provisional** threshold, not a validated or final safety threshold. It avoided `STOPPED` outcomes in these simulated non-siren clips but missed several siren clips. Final tuning requires the real INMP441 microphone, Pi inference rate, and motor-noise tests.
 
 ## 5. Known Limitations
 
@@ -172,6 +184,7 @@ The first single train/test split scored 100%, which was treated as unreliable. 
 - The audio set is small (596 files) and comes from a single source dataset. Clips cut from the same longer recording may not be separable by file name, so leakage between folds cannot be fully excluded.
 - Audio accuracy was measured on clean audio only, not with rover motor noise.
 - The single-strong-cue rule in the fusion can trigger a stop from audio alone.
+- The V3 audio model was saved with scikit-learn 1.9.0 and was rechecked in an environment with 1.9.1, which emits a compatibility warning. Recreate the Pi environment with the training version or retrain/export there before final hardware testing.
 
 ## 6. Reproducing the Work
 
@@ -203,7 +216,7 @@ python eval_vision.py
 Realtime pipeline on recorded files (no hardware):
 
 ```
-python -m evr.realtime --config config.yaml --video demo/traffic.mp4 --audio demo/siren.wav
+python -m evr.realtime --config config.yaml --video demo/traffic.mp4 --audio demo/siren.wav --headless
 ```
 
 `config.yaml` and `config_esp32.yaml` set `vision_input_size: 192` to match the trained model.
@@ -212,27 +225,14 @@ Raw datasets, sorted images and audio, trained models, logs, reports, and demo c
 
 ## 7. Recorded-Clip Pipeline Check
 
-The trained models were run through the realtime pipeline on two free stock ambulance video clips, with the audio track extracted from each video. All runs completed without errors or input-shape mismatches. This checks that the software components work together. It is not an accuracy measurement, because the clips are unrelated to the training data and the audio is not synchronised to the video.
+The V3 audio model was re-run through the realtime pipeline on both supplied ambulance videos in audio-only, headless print-controller mode. The runtime now paces a recorded video at its original frame rate, so that a paired audio file has time to produce its one-second inference windows. Earlier one-row logs were caused by the video finishing before the audio thread could advance.
 
-Fusion settings used: visual weight 0.6, audio weight 0.4, emergency threshold 0.80, clear threshold 0.45, trigger frames 4, clear time 3.0 s.
+| Run | Logged frames | Audio-score range | State sequence | Command sequence |
+| --- | ---: | --- | --- | --- |
+| `traffic.mp4` + `siren.wav` | 592 | 0.4588–0.9695 | NORMAL -> SLOW -> PULL_OVER -> STOPPED | NORMAL -> SLOW -> PULL_RIGHT -> STOP |
+| `traffic_second.mp4` + `siren_second.wav` | 574 | 0.7315–0.9652 | NORMAL -> SLOW -> PULL_OVER -> STOPPED | NORMAL -> SLOW -> PULL_RIGHT -> STOP |
 
-Audio content was checked by listening. Clip 1 has a loud, nearby ambulance siren. Clip 2 has a more distant siren. The siren detections are therefore true detections, not music or speech false positives.
-
-| Run | Result |
-| --- | --- |
-| Clip 1, vision only (592 frames) | NORMAL 256, SLOW 36, PULL_OVER 53, STOPPED 247. Frame classes: normal 309, ambulance 160, police 120, fire_truck 2 |
-| Clip 1, audio only | Siren score 0.988, fused 0.988, state STOPPED |
-| Clip 1, combined | Audio about 0.85, vision on normal at about 0.53 to 0.59, reached STOP via the single-cue rule |
-| Clip 2, combined | Vision alternated between normal, police, and ambulance at about 0.60 to 0.78; audio about 0.996 throughout; stayed STOPPED |
-
-Findings:
-
-- The demo WAV loops indefinitely, so the siren never ends. Staying in STOPPED on it is the expected result, and recovery to NORMAL cannot be assessed on this input.
-- Recovery was tested separately with a synthetic score sequence: NORMAL, SLOW at 0.3 s, PULL_OVER at 1.2 s, STOPPED at 2.4 s, then back to NORMAL after the clear window (observed at 7.4 s). This is synthetic only and not the 3 second resume target measured on the rover.
-- On clip 1 the vision model alone often reads the ambulance as normal, so the audio cue carries the decision in this run.
-- The controller print-mode test passed (commands generated correctly without hardware).
-- The realtime log contains paired rows about 18 ms apart (one `center`, one `unknown`). It is unresolved whether this is expected, and it must be settled before the log is used for final figures.
-- Non-siren audio (music, speech, horns) has not been tested. Because one strong cue can trigger a stop on its own, this test is needed to measure false triggers from audio.
+These checks confirm the current recorded-file path, audio classifier, fusion FSM, command generation, and CSV logging work together. They do not measure live accuracy, false-yield rate, recovery after a vehicle passes, or hardware behaviour. The audio input loops for the clip demonstration, so a return to `NORMAL` cannot be measured there.
 
 ## 8. Remaining Work and Acceptance Targets
 
@@ -251,16 +251,7 @@ Targets are taken from the course build guide.
 | False-yield test | At most 1 in 10 normal runs | Not started |
 | Resume after the emergency vehicle passes | Within 3 seconds | Not started |
 
-Software work that does not need hardware:
-
-- Test non-siren audio (music, speech, horns) for false triggers, and test with motor-like noise added.
-- Resolve the duplicate log rows.
-- Commit the pending changes file by file. Currently modified and uncommitted: `.gitignore`, `config.yaml`, `config_esp32.yaml`. Latest commit: 6427324 "Add fine-tuning options and stratified dataset building for improved model training".
-- Finish the wiring diagram, requirement specification, literature review, and presentation using measured results only (the presentation must not keep simulated 17/20 scenario figures).
-
-Firmware: the existing controller is an Arduino-framework sketch (`firmware/esp32_yield_controller/esp32_yield_controller.ino`, plus an older `esp32_traffic_light` folder). The chosen toolchain is native ESP-IDF through the VS Code Espressif extension (no Arduino IDE, no PlatformIO). Next steps: verify the ESP-IDF install (version, toolchain, board, port), create an ESP-IDF project in a separate firmware directory, port the sketch (UART at 115200 with newline-terminated commands NORMAL, SLOW, PULL_RIGHT, STOP; PWM motor control; LEDs; buzzer; start in STOP; reply `OK`), then build, flash, and confirm the serial reply. The serial port in `config_esp32.yaml` (`/dev/ttyUSB0`) is a Linux path and must be checked on the actual machine.
-
-Open question for the guide: whether training on downloaded public datasets is acceptable, since the course build guide describes self-collected images.
+The remaining acceptance work is hardware-dependent: flash and bench-test the ESP32; configure the Pi camera and INMP441; measure Pi FPS; test the serial link, motor noise, approach direction, false yields, and recovery; then complete the 20 real scenarios. Do not replace this measured status with estimated success counts in the presentation.
 
 ## 9. Repository Layout
 

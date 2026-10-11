@@ -1,158 +1,114 @@
 # Project 27: Emergency Vehicle Recognition and Yield Rover
 
-This project detects ambulance, fire-truck, and police vehicles from a Raspberry Pi Camera, detects sirens with an INMP441 I2S microphone, combines both signals, and commands an ESP32 to slow, pull the 4WD rover right, stop, then resume after the emergency vehicle has passed.
+This is the complete software workspace for a 4WD rover that detects emergency vehicles, yields, and then resumes after the vehicle has passed. The Raspberry Pi runs the camera, microphone, AI models, fusion logic, logging, and USB serial communication. The ESP32 controls the L298N motor driver, traffic-light module, and buzzer.
 
-The code is prepared for the hardware you bought. No steering servo, encoders, database, or additional motor hardware is required for the planned demo.
+The detailed report, datasets, measured results, limitations, and presentation-ready evidence are in the [workspace README](../README.md). This file is the practical guide for running the project.
 
-## What is implemented
+## Faculty Summary
 
-| Area | Implementation |
-|---|---|
-| Vision AI | MobileNetV2 transfer learning, TensorFlow Lite export, four classes: `ambulance`, `fire_truck`, `police`, `normal` |
-| Audio AI | MFCC features plus Random Forest classifier, classes: `siren`, `ambient` |
-| Fusion | Weighted visual/audio confidence, high-confidence single-sensor fallback, multi-frame confirmation |
-| Behaviour | `NORMAL -> SLOW -> PULL_RIGHT -> STOP -> NORMAL` finite-state machine |
-| Pi runtime | Pi Camera Module through Picamera2 with OpenCV fallback, I2S/ALSA microphone input, serial output and CSV logging |
-| ESP32 rover | USB serial commands, 4WD L298N differential-drive control, traffic LEDs and buzzer |
-| Evaluation | Dataset validator, training metric JSON reports, CSV logging, 20-trial scenario template |
-| Safety | ESP32 motor firmware starts in `STOP`; the Pi has separate official power and motors use their own battery pack |
+**Problem:** Give right of way to an approaching ambulance, fire truck, or police vehicle by detecting visual and siren evidence, then commanding a rover to slow, pull right, and stop.
 
-## Honest project status
+**Method:** A MobileNetV2 vision classifier and MFCC plus Random Forest audio classifier run on the Raspberry Pi. Their confidence scores are fused and passed through a multi-frame yield state machine. The Pi sends newline-delimited commands to the ESP32 over USB serial; the ESP32 drives the L298N motor driver, LED traffic module, and buzzer.
 
-The full software structure and hardware code are complete and checked syntactically. The workspace currently contains no uploaded image or audio samples beyond placeholder README files, so final trained model binaries and real accuracy numbers cannot yet exist. This is intentional: model results must be produced from your actual dataset, not invented. Once the data folders are populated, the commands below produce the requested `.tflite`, `.joblib`, labels, and metric reports.
+| Evidence item | Measured result | Honest interpretation |
+| --- | --- | --- |
+| Vision model | **92.14%** validation accuracy on **1,667 images** | Below the 93% project target; it must be reported as 92.14%, not rounded up. |
+| Vision class performance | Ambulance recall **88.00%**, fire-truck recall **96.41%**, normal recall **95.60%**, police recall **91.40%** | Ambulance-to-normal mistakes remain the most important vision risk. |
+| Audio model | **95.01%** held-out-window accuracy on **1,103 windows** | Clean-dataset result, not a motor-noise or live-road result. |
+| ESC-50 fusion simulation at threshold 0.80 | **0/196** non-siren clips stopped; **3-5/8** siren clips stopped depending on update rate/vision condition | `0.80` is provisional: it limits simulated false stops but misses sirens. |
+| Recorded ambulance demo | Both supplied clips reached `NORMAL -> SLOW -> PULL_OVER -> STOPPED` | Software integration check only; not a live-hardware validation. |
 
-## Project layout
+The final hardware results still required for assessment are Pi FPS, INMP441 performance, motor-noise robustness, approach side, ESP32 serial control, false-yield rate, recovery time, and the 20-scenario test.
 
-```text
-data/images/{ambulance,fire_truck,police,normal}/   image dataset (ignored by Git)
-data/audio/{siren,ambient}/                         audio dataset (ignored by Git)
-models/                                             generated models; binary files ignored by Git
-reports/                                            generated validation/training metrics
-src/evr/                                            Python application
-firmware/esp32_yield_controller/                    ESP32 code for L298N 4WD rover
-docs/WIRING.md                                      exact pin, power, and safety guide
-docs/scenario_results_template.csv                  20-run real-demo evaluation sheet
-```
+## Completed Software
 
-## Dataset preparation
+| Area | What exists |
+| --- | --- |
+| Vision | MobileNetV2 transfer-learning pipeline, four classes, TFLite export, labels, validation/evaluation tools |
+| Audio | MFCC plus Random Forest siren classifier, grouped recording split, model labels, ESC-50 tests and threshold sweep |
+| Fusion | Weighted confidence plus high-confidence single-cue fallback and `NORMAL -> SLOW -> PULL_OVER -> STOPPED -> NORMAL` FSM |
+| Runtime | Pi Camera/Picamera2 or OpenCV input, INMP441/ALSA audio input, recorded-file demo mode, CSV logs, serial/GPIO/print controllers |
+| Rover firmware | Arduino ESP32 program for the supplied 4WD L298N rover, active buzzer, and three-light module; native ESP-IDF version also present |
+| Evaluation | Dataset validation, vision evaluation, audio threshold sweep, fusion simulation, log analysis, and a 20-scenario worksheet |
+| Documentation | Wiring, safe power rules, Pi/ESP32 configuration, and this run guide |
 
-Place extracted datasets directly in the canonical folders above. The expected minimum for a first training run is 20 images in each image class and 10 recordings in each audio class; aim for 100-200 images per visual class and 30+ independent recordings per audio class for a credible result.
+## Current Measured Results
 
-If a downloaded dataset has different folder names, copy it into the project with the importer:
+- Vision validation accuracy: **92.14%** on 1,667 images. The stated 93% target is not met.
+- Audio held-out window accuracy: **95.01%** on 1,103 windows.
+- ESC-50 fusion simulation at the provisional `0.80` threshold: zero of 196 non-siren clips reached `STOPPED`, but only 3-5 of 8 siren clips reached `STOPPED`, depending on update rate and simulated vision condition.
+- The current V3 audio model was replayed through both ambulance videos. Each reached `NORMAL -> SLOW -> PULL_OVER -> STOPPED` and produced the expected `NORMAL`, `SLOW`, `PULL_RIGHT`, `STOP` command sequence.
 
-```bash
-python -m evr.prepare_dataset /path/to/extracted/image-dataset --kind images
-python -m evr.prepare_dataset /path/to/extracted/audio-dataset --kind audio
-python -m evr.validate_dataset
-```
+These are offline results. Pi speed, microphone quality, motor noise, direction accuracy, serial control, and the 20-scenario test remain hardware validation work.
 
-For the uploaded Roboflow Indian emergency-vehicle COCO dataset, use the dedicated converter instead:
+## Hardware This Supports
 
-```bash
-python -m evr.prepare_roboflow_vision --source "raw_datasets/Indian emergency vehicles"
-python -m evr.prepare_dataset raw_datasets/sounds --kind audio
-python -m evr.validate_dataset
-```
+- Raspberry Pi 4 Model B 2 GB with official 15 W supply and Pi 5 MP camera
+- INMP441 I2S microphone
+- ESP32-DevKitC or ESP32-WROVER
+- L298N with supplied 4WD chassis and two parallel motor pairs
+- Two 18650 cells for motors, active buzzer, 5 V traffic-light module, breadboard, and jumper wires
 
-The importer recognises common names such as `fire truck`, `firetruck`, `car`, `traffic`, and `noise`. It copies files and never deletes the source dataset. Read `data/import_manifest.json` after each import to ensure its class mapping is correct.
+No steering servo, encoders, database, or extra motor hardware is required. Read [WIRING.md](docs/WIRING.md) before applying power.
 
-Do not mix frames from the same video between image classes. For audio, record/download separate clips for each class; the audio trainer splits by original recording, preventing the same clip from appearing in both train and test sets.
+## Install and Train
 
-## Development setup and training
-
-Use Python 3.10-3.12 for training. TensorFlow does not reliably support every Python 3.13 build, so create the training environment on a supported Python version or use a Raspberry Pi OS Python version supported by your TensorFlow/TFLite package.
+Run from `ev_recognition/`. Use Python 3.10-3.12 for training where possible.
 
 ```bash
-cd ev_recognition
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 python -m evr.validate_dataset
-python -m evr.train_vision --data data/images --epochs 15
+python -m evr.train_vision --data data/images --epochs 15 --img-size 192 --alpha 0.5 --finetune-layers 50 --finetune-epochs 10
 python -m evr.train_audio --data data/audio
 ```
 
-Training output:
+The workspace already has model binaries locally. They, datasets, logs, and generated reports are intentionally ignored by Git; a fresh clone needs the source data and training commands above.
+
+## Dataset Layout
 
 ```text
-models/vision_ev_mobilenet.keras
-models/vision_ev_mobilenet.tflite
-models/vision_labels.txt
-models/audio_siren_classifier.joblib
-models/audio_labels.txt
-reports/vision_training_metrics.json
-reports/audio_training_metrics.json
+data/images/{ambulance,fire_truck,police,normal}/
+data/audio/{siren,ambient}/
+models/
+reports/
 ```
 
-The vision model uses a 160x160 MobileNetV2 with width `0.35`, selected to be practical for a Pi 4 with 2 GB RAM. `vision_input_size` in both configuration files already matches it.
-
-The default vision command uses official ImageNet pretrained weights. When a development computer is offline, use `--weights none` to train an offline model from scratch; retain the resulting validation score in the report instead of claiming transfer-learning performance.
-
-## Raspberry Pi setup
-
-Install Raspberry Pi OS 64-bit, enable the camera, and test it before starting this project:
+Prepare downloaded data with:
 
 ```bash
-rpicam-hello
-sudo apt install python3-picamera2 portaudio19-dev
+python -m evr.prepare_dataset /path/to/images --kind images
+python -m evr.prepare_dataset /path/to/audio --kind audio
+python -m evr.validate_dataset
 ```
 
-Configure the INMP441 as an I2S capture device in Raspberry Pi OS, then find its device index:
+For the imported Roboflow COCO emergency-vehicle set, use `python -m evr.prepare_roboflow_vision --source "raw_datasets/Indian emergency vehicles"`.
+
+## Test Without Hardware
 
 ```bash
-python -m evr.realtime --list-audio-devices
+python -m evr.sweep_audio_threshold --test-dir demo/esc50_test
+python -m evr.simulate_fusion_audio --test-dir demo/esc50_test
+python -m evr.realtime --config config.yaml --video demo/traffic.mp4 --audio demo/siren.wav --no-vision --headless --log-csv logs/demo_audio_only.csv
+python -m evr.evaluate_logs logs/demo_audio_only.csv
 ```
 
-Put the shown device number or name in `audio_device` in `config_esp32.yaml`. The runtime uses `camera_backend: auto`, which selects Picamera2 when available and falls back to OpenCV for a USB webcam.
+Recorded videos run at their saved frame rate by default so paired audio remains synchronised with the runtime clock. Add `--fast-video` only for a quick vision batch check. The default `config.yaml` uses the safe print controller and does not move hardware.
 
-## ESP32 and rover
+## Run on the Rover
 
-Open `firmware/esp32_yield_controller/esp32_yield_controller.ino` in Arduino IDE and upload it to the ESP32. Connect its USB data cable to the Pi. Use `config_esp32.yaml`; change `/dev/ttyUSB0` to `/dev/ttyACM0` if that is where the ESP32 appears.
+The deployment guide, including exactly what goes on the Pi and ESP32, is [PI_DEPLOYMENT.md](docs/PI_DEPLOYMENT.md). In short:
 
-Test outputs with the wheels raised first:
+1. Copy the whole `ev_recognition/` folder to the Pi, including the locally generated `models/` files.
+2. Upload `firmware/esp32_yield_controller/esp32_yield_controller.ino` to the ESP32.
+3. Follow [WIRING.md](docs/WIRING.md), test LEDs/buzzer with motors disconnected, then test with wheels raised.
+4. On the Pi, configure the INMP441 as an I2S capture device and set the microphone device plus ESP32 serial port in `config_esp32.yaml`.
+5. Run `python -m evr.test_controller --config config_esp32.yaml --mode serial`, then `python -m evr.realtime --config config_esp32.yaml`.
 
-```bash
-python -m evr.test_controller --config config_esp32.yaml --mode serial --command STOP
-python -m evr.test_controller --config config_esp32.yaml --mode serial
-```
+The ESP32 firmware starts in `STOP`. Keep the rover raised during first motor tests.
 
-Read [the wiring guide](docs/WIRING.md) before connecting power. The L298N controls the left and right motor pairs separately; `PULL_RIGHT` is a controlled right arc, not servo steering.
+## Git Policy
 
-## Run the live demo
-
-```bash
-python -m evr.realtime --config config_esp32.yaml
-```
-
-For a safe laptop demo without ESP32 hardware, use the default `config.yaml` print controller. For a repeatable clip demo:
-
-```bash
-python -m evr.realtime --config config.yaml --video demo/ambulance.mp4 --audio demo/siren.wav
-```
-
-Press `q` to stop. Each run writes `logs/realtime_log.csv`; summarize it with:
-
-```bash
-python -m evr.evaluate_logs logs/realtime_log.csv
-```
-
-Before data and hardware are available, the fusion state machine can still be demonstrated honestly:
-
-```bash
-python -m evr.demo_simulation --config config.yaml --speed 4
-```
-
-## Evaluation and PPT/report evidence
-
-Run the 20 tests in `docs/scenario_results_template.csv`, record detection/yield/resume outcomes, and calculate the final success rate from those real entries. Do not claim `93%` accuracy or `18/20` yielding until the training reports and test matrix actually show it.
-
-```bash
-python -m evr.evaluate_trials docs/scenario_results_template.csv
-```
-
-For your PPT include: project objective and road-safety importance; system block diagram (camera and mic to Pi, Pi fusion to ESP32, ESP32 to L298N/LED/buzzer); dataset class counts and source licences; vision and audio model diagrams; fusion formula; yield state diagram; wiring photo; training accuracy/confusion matrix from `reports`; and the 20-trial results table. Explain false negatives as the higher safety risk and show how multi-frame confirmation reduces false alarms.
-
-## Git and .gitignore
-
-`.gitignore` is updated. It keeps code, configurations, wiring documentation, label text files, and the 20-test template in Git, but excludes raw datasets, large model binaries, generated logs, local virtual environments, and machine-specific settings. This is correct even before a GitHub remote is connected. When ready, add a remote and commit the source/documentation; do not commit downloaded data or models.
+`.gitignore` is ready: it excludes raw datasets, model binaries, reports, logs, local environments, and generated ESP-IDF output while retaining code, configuration, labels, firmware, wiring, and documentation. Do not commit model binaries or downloaded datasets. The current V3 audio model backup is also ignored.
