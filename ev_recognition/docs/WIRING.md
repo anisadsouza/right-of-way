@@ -59,3 +59,12 @@ Use the traffic module's `VCC` and `GND` as specified by the module. If it is a 
 5. Only then place it on the floor at low speed and tune motor speeds in the firmware if needed.
 
 The ESP32 firmware starts in `STOP` mode. It should remain connected to the Pi via USB during the demo.
+
+## Which code runs on which board
+
+| Board | Files | What it does |
+|---|---|---|
+| Raspberry Pi 4 | `src/evr/realtime.py`, `src/evr/vision.py`, `src/evr/audio.py`, `src/evr/fusion.py`, `src/evr/controller.py`, `config_esp32.yaml`, and files in `models/` | Reads the camera and INMP441, classifies images/audio, fuses evidence, logs results, then sends commands by USB serial. |
+| ESP32 | `firmware/esp32_yield_controller/esp32_yield_controller.ino` | Receives `NORMAL`, `SLOW`, `PULL_RIGHT`, or `STOP`; controls L298N motors, traffic lights, and buzzer. |
+
+Do not copy or run the Arduino `.ino` file on the Pi. Do not run the ML training scripts on the ESP32. The Pi runtime command and installation steps are in [PI_DEPLOYMENT.md](PI_DEPLOYMENT.md).
