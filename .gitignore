@@ -25,3 +25,13 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# ESC-50 downloaded dataset and generated audio
+ev_recognition/raw_datasets/
+ev_recognition/data/audio/*/
+ev_recognition/demo/esc50/
+ev_recognition/demo/esc50_test/
+ev_recognition/models/*.joblib
+ev_recognition/reports/esc50_v1.csv
+ev_recognition/reports/esc50_v2.csv
+.clangd
