@@ -25,6 +25,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audio", type=Path, help="Optional audio file instead of microphone.")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio classifier.")
     parser.add_argument("--no-vision", action="store_true", help="Disable vision classifier.")
+    parser.add_argument("--headless", action="store_true", help="Do not open the OpenCV preview window.")
+    parser.add_argument("--fast-video", action="store_true", help="Process a video file as fast as possible instead of at its recorded frame rate.")
+    parser.add_argument("--log-csv", type=Path, help="Override the CSV log path from the configuration.")
     parser.add_argument("--list-audio-devices", action="store_true", help="Print available microphone devices and exit.")
     return parser.parse_args()
 
@@ -66,7 +69,7 @@ def main() -> None:
         config.controller.red_pin,
         config.controller.buzzer_pin,
     )
-    logger = CsvLogger(config.log_csv)
+    logger = CsvLogger(args.log_csv or config.log_csv)
     audio_source = AudioSource(config.audio_sample_rate, config.audio_window_seconds, args.audio, config.audio_device)
 
     cap = open_camera(args.video, config.camera_backend, config.camera_index, config.frame_width, config.frame_height)
@@ -77,6 +80,13 @@ def main() -> None:
         audio_source.start()
 
     frame_count = 0
+    show_window = config.show_window and not args.headless
+    video_frame_interval = 0.0
+    if args.video and not args.fast_video:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps and fps > 0:
+            video_frame_interval = 1.0 / fps
+    next_frame_time = time.monotonic()
     last_vision = ("none", 0.0, None)
     last_audio = ("none", 0.0, None)
     last_command = ""
@@ -119,11 +129,17 @@ def main() -> None:
                 side,
             )
 
-            if config.show_window:
+            if show_window:
                 draw_overlay(frame, last_vision, last_audio, result.emergency_confidence, result.state.value, side)
                 cv2.imshow("Emergency Vehicle Recognition", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
+
+            # A paired audio file advances in real time. Pace recorded video too,
+            # otherwise the video ends before its audio windows are available.
+            if video_frame_interval:
+                next_frame_time += video_frame_interval
+                time.sleep(max(0.0, next_frame_time - time.monotonic()))
     finally:
         audio_source.stop()
         cap.release()
