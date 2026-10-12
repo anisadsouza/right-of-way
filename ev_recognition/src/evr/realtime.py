@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import queue
+import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -13,6 +16,7 @@ import soundfile as sf
 
 from evr.audio import AudioClassifier
 from evr.config import load_config
+from evr.detect import VehicleDetector, crop_for_classifier, draw_boxes
 from evr.controller import CsvLogger, make_controller
 from evr.fusion import EmergencyFusion
 from evr.vision import VisionClassifier, estimate_approach_side
@@ -28,6 +32,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headless", action="store_true", help="Do not open the OpenCV preview window.")
     parser.add_argument("--fast-video", action="store_true", help="Process a video file as fast as possible instead of at its recorded frame rate.")
     parser.add_argument("--log-csv", type=Path, help="Override the CSV log path from the configuration.")
+    parser.add_argument("--boxes", action="store_true", help="Demo only: draw boxes around vehicles (needs: pip install ultralytics).")
+    parser.add_argument("--box-classify", action="store_true", help="Experimental: also score each box with the emergency classifier.")
+    parser.add_argument("--box-every", type=int, default=3, help="Run the box detector every N frames.")
+    parser.add_argument("--box-weights", type=Path, default=Path("models/yolov8n.pt"))
+    parser.add_argument("--frame-out", type=Path, help="Write the annotated frame to this JPEG file about 10 times per second (used by the dashboard).")
     parser.add_argument("--list-audio-devices", action="store_true", help="Print available microphone devices and exit.")
     return parser.parse_args()
 
@@ -59,6 +68,13 @@ def main() -> None:
     if vision is None and audio is None:
         raise SystemExit("No model available. Train vision/audio models or pass a valid config.")
 
+    detector = None
+    if args.boxes:
+        try:
+            detector = VehicleDetector(args.box_weights)
+        except Exception as error:
+            print(f"Vehicle boxes disabled: {error}")
+
     fusion = EmergencyFusion(config.fusion)
     controller = make_controller(
         config.controller.mode,
@@ -79,6 +95,9 @@ def main() -> None:
     if audio is not None:
         audio_source.start()
 
+    # The dashboard stops a run with SIGTERM. Exit cleanly so controller.close() runs and the rover is told to STOP.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
     frame_count = 0
     show_window = config.show_window and not args.headless
     video_frame_interval = 0.0
@@ -90,6 +109,9 @@ def main() -> None:
     last_vision = ("none", 0.0, None)
     last_audio = ("none", 0.0, None)
     last_command = ""
+    side = "unknown"
+    boxes = []
+    last_frame_write = 0.0
 
     try:
         while True:
@@ -98,7 +120,6 @@ def main() -> None:
                 break
 
             frame_count += 1
-            side = "unknown"
 
             if vision is not None and frame_count % config.vision_every_n_frames == 0:
                 v_label, v_conf, v_score = vision.predict(frame)
@@ -110,6 +131,14 @@ def main() -> None:
                 if chunk is not None:
                     a_label, a_conf, a_score = audio.predict(chunk)
                     last_audio = (a_label, a_conf, a_score)
+
+            if detector is not None and (frame_count - 1) % max(args.box_every, 1) == 0:
+                boxes = detector.detect(frame)
+                if args.box_classify and vision is not None:
+                    for det in boxes[:4]:
+                        crop = crop_for_classifier(frame, det)
+                        if crop is not None:
+                            det.ev_score = vision.predict(crop)[2]
 
             result = fusion.update(last_vision[2], last_audio[2])
             if result.command != last_command:
@@ -129,11 +158,17 @@ def main() -> None:
                 side,
             )
 
-            if show_window:
-                draw_overlay(frame, last_vision, last_audio, result.emergency_confidence, result.state.value, side)
-                cv2.imshow("Emergency Vehicle Recognition", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+            if show_window or args.frame_out is not None:
+                view, scale = make_view(frame)
+                draw_boxes(view, boxes, scale, config.fusion.emergency_threshold)
+                draw_overlay(view, last_vision, last_audio, result.emergency_confidence, result.state.value, side)
+                if args.frame_out is not None and time.monotonic() - last_frame_write >= 0.1:
+                    write_frame(view, args.frame_out)
+                    last_frame_write = time.monotonic()
+                if show_window:
+                    cv2.imshow("Emergency Vehicle Recognition", view)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
 
             # A paired audio file advances in real time. Pace recorded video too,
             # otherwise the video ends before its audio windows are available.
@@ -259,6 +294,22 @@ class PiCameraCapture:
 
     def release(self) -> None:
         self.camera.stop()
+
+
+def make_view(frame, max_width: int = 960):
+    """Downscale a copy of the frame for display. Returns (view, scale)."""
+    height, width = frame.shape[:2]
+    scale = min(1.0, max_width / width)
+    if scale < 1.0:
+        return cv2.resize(frame, (int(width * scale), int(height * scale))), scale
+    return frame.copy(), 1.0
+
+
+def write_frame(view, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.stem + ".tmp.jpg")
+    cv2.imwrite(str(temp), view, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    os.replace(temp, path)
 
 
 def draw_overlay(frame, vision, audio, fused: float, state: str, side: str) -> None:

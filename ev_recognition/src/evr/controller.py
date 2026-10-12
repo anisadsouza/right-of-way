@@ -41,7 +41,14 @@ class SerialController(YieldController):
         self.last_command = command
 
     def close(self) -> None:
-        self.serial.close()
+        # Never leave the rover driving when the program ends or is stopped.
+        try:
+            self.serial.write(b"STOP\n")
+            self.serial.flush()
+        except Exception:
+            pass
+        finally:
+            self.serial.close()
 
 
 class GpioTrafficLightController(YieldController):

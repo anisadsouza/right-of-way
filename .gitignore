@@ -35,3 +35,6 @@ ev_recognition/models/*.joblib
 ev_recognition/reports/esc50_v1.csv
 ev_recognition/reports/esc50_v2.csv
 .clangd
+
+ev_recognition/backups/
+ev_recognition/logs/live_frame.jpg
