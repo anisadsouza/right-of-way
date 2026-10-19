@@ -88,9 +88,13 @@ def main() -> None:
     logger = CsvLogger(args.log_csv or config.log_csv)
     audio_source = AudioSource(config.audio_sample_rate, config.audio_window_seconds, args.audio, config.audio_device)
 
-    cap = open_camera(args.video, config.camera_backend, config.camera_index, config.frame_width, config.frame_height)
-    if not cap.isOpened():
-        raise SystemExit("Could not open camera/video source.")
+    # An audio-only run (no vision model, no video file, no vehicle boxes) does not need a camera.
+    use_camera = vision is not None or detector is not None or args.video is not None
+    cap = None
+    if use_camera:
+        cap = open_camera(args.video, config.camera_backend, config.camera_index, config.frame_width, config.frame_height)
+        if not cap.isOpened():
+            raise SystemExit("Could not open camera/video source.")
 
     if audio is not None:
         audio_source.start()
@@ -115,9 +119,13 @@ def main() -> None:
 
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
+            if cap is not None:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+            else:
+                frame = None
+                time.sleep(AUDIO_ONLY_INTERVAL)
 
             frame_count += 1
 
@@ -158,7 +166,7 @@ def main() -> None:
                 side,
             )
 
-            if show_window or args.frame_out is not None:
+            if frame is not None and (show_window or args.frame_out is not None):
                 view, scale = make_view(frame)
                 draw_boxes(view, boxes, scale, config.fusion.emergency_threshold)
                 draw_overlay(view, last_vision, last_audio, result.emergency_confidence, result.state.value, side)
@@ -175,12 +183,20 @@ def main() -> None:
             if video_frame_interval:
                 next_frame_time += video_frame_interval
                 time.sleep(max(0.0, next_frame_time - time.monotonic()))
+                
+    except KeyboardInterrupt:
+        print("Stopped.")
+    
     finally:
         audio_source.stop()
-        cap.release()
+        if cap is not None:
+            cap.release()
         logger.close()
         controller.close()
         cv2.destroyAllWindows()
+
+
+AUDIO_ONLY_INTERVAL = 0.1  # seconds between fusion updates when there is no camera
 
 
 class AudioSource:

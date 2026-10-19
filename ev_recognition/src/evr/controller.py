@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 try:
@@ -32,6 +33,9 @@ class SerialController(YieldController):
         if serial is None:
             raise RuntimeError("pyserial is required for ESP32 serial control. Run: pip install pyserial")
         self.serial = serial.Serial(port, baudrate=baudrate, timeout=0.25)
+        # Opening the port can reset the ESP32. Wait for it to boot, or the first command is lost.
+        time.sleep(2.0)
+        self.serial.reset_input_buffer()
         self.last_command = ""
 
     def send(self, command: str) -> None:
@@ -145,3 +149,4 @@ class CsvLogger:
 
     def close(self) -> None:
         self.file.close()
+        
