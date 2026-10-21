@@ -265,3 +265,51 @@ ev_recognition/
   config_esp32.yaml   Pi and ESP32 configuration
   sort_coco_dataset.py, rebalance_dataset.py, eval_vision.py
 ```
+## 10. Running Audio Samples
+
+Activate the project environment before running the audio samples.
+
+```bash
+cd /Users/anisadsouza/Desktop/pinnacle/ev_recognition
+source .venv/bin/activate
+```
+
+### 1. Ambulance Siren
+
+```bash
+afplay demo/siren.wav
+afplay demo/siren_second.wav
+afplay raw_datasets/sounds/ambulance/sound_216.wav
+```
+
+**Note:** Verify that `sound_216.wav` exists in the ambulance folder before running it.
+
+### 2. Fire Truck Siren
+
+```bash
+afplay raw_datasets/sounds/firetruck/sound_216.wav
+afplay raw_datasets/sounds/firetruck/sound_202.wav
+afplay raw_datasets/sounds/firetruck/sound_362.wav
+```
+
+### 3. Police Siren
+
+```bash
+afplay data/audio/siren/sound_216.wav
+afplay data/audio/siren/esc50_1-76831-D-42.wav
+afplay demo/esc50/siren_external.wav
+```
+
+**Note:** These are generic siren samples and have not been verified as police-specific recordings. The project currently does not have a confirmed, separate police-siren dataset.
+
+## Running the Dashboard
+
+Open a terminal and run:
+
+```bash
+cd /Users/anisadsouza/Desktop/pinnacle/ev_recognition
+source .venv/bin/activate
+python -m evr.dashboard
+```
+
+Open the local URL printed in the terminal, if one is provided, to access the dashboard.
