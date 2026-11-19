@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 try:
     import serial
@@ -53,6 +56,44 @@ class SerialController(YieldController):
             pass
         finally:
             self.serial.close()
+
+
+class WifiController(YieldController):
+    """Send Pi recognition commands to the ESP32 over Wi-Fi."""
+
+    def __init__(
+        self,
+        host: str = "192.168.4.1",
+        port: int = 80,
+        timeout: float = 1.0,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.last_command = ""
+
+    def send(self, command: str) -> None:
+        if command not in {"NORMAL", "SLOW", "PULL_RIGHT", "STOP"}:
+            raise ValueError(f"Invalid ESP32 command: {command}")
+
+        params = urlencode({"command": command})
+        url = f"http://{self.host}:{self.port}/pi_cmd?{params}"
+
+        try:
+            with urlopen(url, timeout=self.timeout) as response:
+                response.read()
+
+            if command != self.last_command:
+                print(f"[wifi-controller] ESP32 received: {command}")
+
+            self.last_command = command
+
+        except (URLError, TimeoutError, OSError) as exc:
+            print(f"[wifi-controller] Could not reach ESP32: {exc}")
+
+    def close(self) -> None:
+        # Request a safe stop when the Pi program exits.
+        self.send("STOP")
 
 
 class GpioTrafficLightController(YieldController):
@@ -116,11 +157,15 @@ def make_controller(
     normalized = mode.lower()
     if normalized == "serial":
         return SerialController(port, baudrate)
+    if normalized == "wifi":
+        return WifiController()
     if normalized == "gpio":
         return GpioTrafficLightController(green_pin, yellow_pin, red_pin, buzzer_pin)
     if normalized == "print":
         return PrintController()
-    raise ValueError(f"Unknown controller mode: {mode}. Use print, serial, or gpio.")
+    raise ValueError(
+        f"Unknown controller mode: {mode}. Use print, serial, wifi, or gpio."
+    )
 
 
 class CsvLogger:

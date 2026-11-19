@@ -4,13 +4,17 @@
  * ESP32-WROVER / ESP-IDF 5.5.x
  *
  * AUTO:
- *   Raspberry Pi commands over UART0.
+ *   Raspberry Pi commands over Wi-Fi (/pi_cmd).
+ *   UART0 support retained as a fallback.
  *
  * MANUAL:
  *   Phone commands over the ESP32 Wi-Fi access point.
  *
- * The original main.c is not used by this RC build.
- * Original project remains untouched.
+ * Safety:
+ *   - Manual command timeout.
+ *   - AUTO Pi heartbeat timeout.
+ *   - AUTO lockout after communication loss.
+ *   - MANUAL -> AUTO transition required to clear lockout.
  */
 
 #include <ctype.h>
@@ -51,7 +55,9 @@
 #define PWM_MODE       LEDC_LOW_SPEED_MODE
 
 #define BUZZER_DURATION_MS 2000
+
 #define MANUAL_TIMEOUT_US  700000
+#define AUTO_TIMEOUT_US    1000000
 
 #define WIFI_SSID      "PROJECT27_RC"
 #define WIFI_PASSWORD  "P27Car2026"
@@ -72,10 +78,10 @@ static httpd_handle_t web_server = NULL;
 static bool manual_moving = false;
 static int64_t last_manual_command_us = 0;
 
-/*
- * Remember the latest Pi command.
- * This allows AUTO mode to resume correctly after MANUAL mode.
- */
+static bool auto_pi_seen = false;
+static bool auto_link_lost = false;
+static int64_t last_auto_command_us = 0;
+
 static char last_pi_command[LINE_MAX_LEN] = "STOP";
 
 /* ---------------- MOTOR AND OUTPUT CONTROL ---------------- */
@@ -197,8 +203,7 @@ static void stop_motors(void)
 /* ---------------- AUTO MODE ---------------- */
 
 /*
- * This function is called while control_mutex is already held.
- * It applies the remembered Pi command without taking the mutex again.
+ * Called only while control_mutex is held.
  */
 static void apply_auto_command_locked(const char *command)
 {
@@ -218,35 +223,63 @@ static void apply_auto_command_locked(const char *command)
         drive(110, 35);
     }
     else {
-        /* STOP or unknown remembered state: remain stopped. */
         stop_motors();
         buzzer_off();
         set_lights(false, false, true);
     }
 }
 
-static void apply_pi_command(const char *command)
+/*
+ * Returns true if the Pi command was accepted.
+ *
+ * Pi commands are accepted only in AUTO mode.
+ * Once the AUTO heartbeat watchdog has locked the controller,
+ * further Pi commands cannot restart movement.
+ */
+static bool apply_pi_command(const char *command)
 {
+    bool accepted = false;
+
     xSemaphoreTake(control_mutex, portMAX_DELAY);
 
-    strncpy(last_pi_command, command, sizeof(last_pi_command) - 1);
-    last_pi_command[sizeof(last_pi_command) - 1] = '\0';
+    if (current_mode == MODE_AUTO && !auto_link_lost) {
 
-    /*
-     * STOP is always accepted.
-     * Other Pi commands are applied only in AUTO mode.
-     */
-    if (strcmp(command, "STOP") == 0) {
-        manual_moving = false;
-        stop_motors();
-        set_lights(false, false, true);
-        buzzer_on_for_a_few_seconds();
-    }
-    else if (current_mode == MODE_AUTO) {
-        apply_auto_command_locked(command);
+        int64_t now = esp_timer_get_time();
+
+        bool command_changed =
+            strcmp(command, last_pi_command) != 0;
+
+        bool first_command = !auto_pi_seen;
+
+        last_auto_command_us = now;
+        auto_pi_seen = true;
+
+        strncpy(
+            last_pi_command,
+            command,
+            sizeof(last_pi_command) - 1
+        );
+
+        last_pi_command[sizeof(last_pi_command) - 1] = '\0';
+
+        if (strcmp(command, "STOP") == 0) {
+            stop_motors();
+            set_lights(false, false, true);
+
+            if (command_changed || first_command) {
+                buzzer_on_for_a_few_seconds();
+            }
+        }
+        else if (command_changed || first_command) {
+            apply_auto_command_locked(command);
+        }
+
+        accepted = true;
     }
 
     xSemaphoreGive(control_mutex);
+
+    return accepted;
 }
 
 /* ---------------- MANUAL MODE: PHONE ---------------- */
@@ -255,9 +288,6 @@ static void apply_manual_command(const char *command)
 {
     xSemaphoreTake(control_mutex, portMAX_DELAY);
 
-    /*
-     * STOP is accepted regardless of the current mode.
-     */
     if (strcmp(command, "STOP") == 0) {
         manual_moving = false;
         stop_motors();
@@ -301,7 +331,6 @@ static void change_mode(control_mode_t new_mode)
 {
     xSemaphoreTake(control_mutex, portMAX_DELAY);
 
-    /* Always stop before changing operating modes. */
     stop_motors();
     buzzer_off();
     manual_moving = false;
@@ -309,15 +338,27 @@ static void change_mode(control_mode_t new_mode)
     current_mode = new_mode;
 
     if (new_mode == MODE_AUTO) {
-    /*
-     * Safety: never resume movement using a stale Pi command.
-     * Wait for a fresh command from the Raspberry Pi.
-     */
-    stop_motors();
-    set_lights(false, false, true);
+        /*
+         * A deliberate MANUAL -> AUTO transition clears
+         * the previous AUTO communication lockout.
+         *
+         * AUTO starts stopped and waits for a fresh Pi command.
+         */
+        auto_pi_seen = false;
+        auto_link_lost = false;
+        last_auto_command_us = 0;
 
+        strncpy(
+            last_pi_command,
+            "STOP",
+            sizeof(last_pi_command)
+        );
+
+        stop_motors();
+        set_lights(false, false, true);
     }
     else {
+        auto_pi_seen = false;
         set_lights(false, false, false);
     }
 
@@ -432,6 +473,7 @@ static esp_err_t root_handler(httpd_req_t *request)
     );
 }
 
+/* Phone manual movement endpoint. */
 static esp_err_t command_handler(httpd_req_t *request)
 {
     char query[64];
@@ -475,6 +517,7 @@ static esp_err_t command_handler(httpd_req_t *request)
     return ESP_OK;
 }
 
+/* Phone AUTO/MANUAL mode endpoint. */
 static esp_err_t mode_handler(httpd_req_t *request)
 {
     char query[64];
@@ -518,6 +561,76 @@ static esp_err_t mode_handler(httpd_req_t *request)
     return ESP_OK;
 }
 
+/*
+ * Raspberry Pi AUTO command endpoint.
+ *
+ * Example:
+ *   GET /pi_cmd?command=NORMAL
+ *   GET /pi_cmd?command=SLOW
+ *   GET /pi_cmd?command=PULL_RIGHT
+ *   GET /pi_cmd?command=STOP
+ */
+static esp_err_t pi_command_handler(httpd_req_t *request)
+{
+    char query[96];
+    char command[24];
+
+    if (httpd_req_get_url_query_str(
+            request, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(
+            query, "command", command, sizeof(command)) != ESP_OK) {
+
+        httpd_resp_send_err(
+            request,
+            HTTPD_400_BAD_REQUEST,
+            "Missing command"
+        );
+
+        return ESP_OK;
+    }
+
+    for (size_t i = 0; command[i]; i++) {
+        command[i] = (char)toupper((unsigned char)command[i]);
+    }
+
+    if (strcmp(command, "NORMAL") != 0 &&
+        strcmp(command, "SLOW") != 0 &&
+        strcmp(command, "PULL_RIGHT") != 0 &&
+        strcmp(command, "STOP") != 0) {
+
+        httpd_resp_send_err(
+            request,
+            HTTPD_400_BAD_REQUEST,
+            "Unknown Pi command"
+        );
+
+        return ESP_OK;
+    }
+
+    if (!apply_pi_command(command)) {
+        httpd_resp_set_status(request, "409 Conflict");
+        httpd_resp_sendstr(
+            request,
+            "Pi command rejected: switch MANUAL then AUTO to reset safety lockout"
+        );
+
+        return ESP_OK;
+    }
+
+    char response[40];
+
+    snprintf(
+        response,
+        sizeof(response),
+        "OK %s",
+        command
+    );
+
+    httpd_resp_sendstr(request, response);
+
+    return ESP_OK;
+}
+
 /* ---------------- WEB SERVER ---------------- */
 
 static void start_web_server(void)
@@ -545,9 +658,16 @@ static void start_web_server(void)
         .handler = mode_handler
     };
 
+    httpd_uri_t pi_command = {
+        .uri = "/pi_cmd",
+        .method = HTTP_GET,
+        .handler = pi_command_handler
+    };
+
     ESP_ERROR_CHECK(httpd_register_uri_handler(web_server, &root));
     ESP_ERROR_CHECK(httpd_register_uri_handler(web_server, &command));
     ESP_ERROR_CHECK(httpd_register_uri_handler(web_server, &mode));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(web_server, &pi_command));
 }
 
 /* ---------------- WI-FI ACCESS POINT ---------------- */
@@ -595,7 +715,7 @@ static void start_wifi(void)
     start_web_server();
 }
 
-/* ---------------- MANUAL COMMAND WATCHDOG ---------------- */
+/* ---------------- MANUAL + AUTO WATCHDOG ---------------- */
 
 static void watchdog_task(void *argument)
 {
@@ -606,12 +726,34 @@ static void watchdog_task(void *argument)
 
         xSemaphoreTake(control_mutex, portMAX_DELAY);
 
-        if (current_mode == MODE_MANUAL && manual_moving) {
-            int64_t now = esp_timer_get_time();
+        int64_t now = esp_timer_get_time();
 
+        /*
+         * MANUAL watchdog:
+         * Stop if the phone stops refreshing its movement command.
+         */
+        if (current_mode == MODE_MANUAL && manual_moving) {
             if (now - last_manual_command_us > MANUAL_TIMEOUT_US) {
                 stop_motors();
                 manual_moving = false;
+            }
+        }
+
+        /*
+         * AUTO watchdog:
+         * Stop and lock AUTO if Pi communication disappears.
+         */
+        if (current_mode == MODE_AUTO &&
+            auto_pi_seen &&
+            !auto_link_lost) {
+
+            if (now - last_auto_command_us > AUTO_TIMEOUT_US) {
+                auto_link_lost = true;
+                auto_pi_seen = false;
+
+                stop_motors();
+                buzzer_off();
+                set_lights(false, false, true);
             }
         }
 
@@ -620,6 +762,8 @@ static void watchdog_task(void *argument)
 }
 
 /* ---------------- UART COMMUNICATION WITH PI ---------------- */
+
+/* UART support retained as a fallback. */
 
 static void reply(const char *text)
 {
@@ -659,13 +803,12 @@ static void process_uart_command(const char *command)
         strcmp(command, "PULL_RIGHT") == 0 ||
         strcmp(command, "STOP") == 0) {
 
-        apply_pi_command(command);
-
-        /*
-         * The Pi controller does not wait for an acknowledgement,
-         * but retain a simple OK response for compatibility.
-         */
-        reply("OK");
+        if (apply_pi_command(command)) {
+            reply("OK");
+        }
+        else {
+            reply("AUTO command rejected");
+        }
     }
     else {
         char response[LINE_MAX_LEN + 32];
@@ -730,6 +873,9 @@ void app_main(void)
 
     reply("EVR ESP32 RC controller ready");
 
+    /*
+     * Existing UART receive loop retained.
+     */
     char line[LINE_MAX_LEN];
     size_t length = 0;
     uint8_t byte;

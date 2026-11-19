@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import argparse
@@ -22,8 +23,17 @@ from evr.fusion import EmergencyFusion
 from evr.vision import VisionClassifier, estimate_approach_side
 
 
+# Send the current controller command periodically.
+# This heartbeat allows the ESP32 to detect a lost Pi connection.
+COMMAND_HEARTBEAT_SECONDS = 0.25
+
+AUDIO_ONLY_INTERVAL = 0.1
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Realtime emergency vehicle recognition.")
+    parser = argparse.ArgumentParser(
+        description="Realtime emergency vehicle recognition."
+    )
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--video", type=Path, help="Optional video file instead of camera.")
     parser.add_argument("--audio", type=Path, help="Optional audio file instead of microphone.")
@@ -43,15 +53,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
     if args.list_audio_devices:
         print(sd.query_devices())
         return
+
     config = load_config(args.config)
 
     vision = None
     audio = None
+
     if not args.no_vision and config.vision_model.exists():
-        vision = VisionClassifier(config.vision_model, config.vision_labels, config.vision_input_size)
+        vision = VisionClassifier(
+            config.vision_model,
+            config.vision_labels,
+            config.vision_input_size,
+        )
     elif not args.no_vision:
         print("Vision model not found. Run: python -m evr.train_vision")
 
@@ -66,9 +83,12 @@ def main() -> None:
         print("Audio model not found. Run: python -m evr.train_audio")
 
     if vision is None and audio is None:
-        raise SystemExit("No model available. Train vision/audio models or pass a valid config.")
+        raise SystemExit(
+            "No model available. Train vision/audio models or pass a valid config."
+        )
 
     detector = None
+
     if args.boxes:
         try:
             detector = VehicleDetector(args.box_weights)
@@ -76,6 +96,7 @@ def main() -> None:
             print(f"Vehicle boxes disabled: {error}")
 
     fusion = EmergencyFusion(config.fusion)
+
     controller = make_controller(
         config.controller.mode,
         config.serial.port,
@@ -85,42 +106,73 @@ def main() -> None:
         config.controller.red_pin,
         config.controller.buzzer_pin,
     )
-    logger = CsvLogger(args.log_csv or config.log_csv)
-    audio_source = AudioSource(config.audio_sample_rate, config.audio_window_seconds, args.audio, config.audio_device)
 
-    # An audio-only run (no vision model, no video file, no vehicle boxes) does not need a camera.
-    use_camera = vision is not None or detector is not None or args.video is not None
+    logger = CsvLogger(args.log_csv or config.log_csv)
+
+    audio_source = AudioSource(
+        config.audio_sample_rate,
+        config.audio_window_seconds,
+        args.audio,
+        config.audio_device,
+    )
+
+    # An audio-only run does not need a camera.
+    use_camera = (
+        vision is not None
+        or detector is not None
+        or args.video is not None
+    )
+
     cap = None
+
     if use_camera:
-        cap = open_camera(args.video, config.camera_backend, config.camera_index, config.frame_width, config.frame_height)
+        cap = open_camera(
+            args.video,
+            config.camera_backend,
+            config.camera_index,
+            config.frame_width,
+            config.frame_height,
+        )
+
         if not cap.isOpened():
             raise SystemExit("Could not open camera/video source.")
 
     if audio is not None:
         audio_source.start()
 
-    # The dashboard stops a run with SIGTERM. Exit cleanly so controller.close() runs and the rover is told to STOP.
+    # The dashboard stops a run with SIGTERM.
+    # Exit cleanly so controller.close() can request STOP.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     frame_count = 0
     show_window = config.show_window and not args.headless
+
     video_frame_interval = 0.0
+
     if args.video and not args.fast_video:
         fps = cap.get(cv2.CAP_PROP_FPS)
+
         if fps and fps > 0:
             video_frame_interval = 1.0 / fps
+
     next_frame_time = time.monotonic()
+
     last_vision = ("none", 0.0, None)
     last_audio = ("none", 0.0, None)
+
     last_command = ""
+    last_command_sent_at = 0.0
+
     side = "unknown"
     boxes = []
     last_frame_write = 0.0
 
     try:
         while True:
+
             if cap is not None:
                 ok, frame = cap.read()
+
                 if not ok:
                     break
             else:
@@ -129,31 +181,74 @@ def main() -> None:
 
             frame_count += 1
 
-            if vision is not None and frame_count % config.vision_every_n_frames == 0:
+            # -------------------------
+            # Vision processing
+            # -------------------------
+            if (
+                vision is not None
+                and frame_count % config.vision_every_n_frames == 0
+            ):
                 v_label, v_conf, v_score = vision.predict(frame)
                 side = estimate_approach_side(frame)
                 last_vision = (v_label, v_conf, v_score)
 
+            # -------------------------
+            # Audio processing
+            # -------------------------
             if audio is not None:
                 chunk = audio_source.latest()
+
                 if chunk is not None:
                     a_label, a_conf, a_score = audio.predict(chunk)
                     last_audio = (a_label, a_conf, a_score)
 
-            if detector is not None and (frame_count - 1) % max(args.box_every, 1) == 0:
+            # -------------------------
+            # Optional vehicle detection
+            # -------------------------
+            if (
+                detector is not None
+                and (frame_count - 1) % max(args.box_every, 1) == 0
+            ):
                 boxes = detector.detect(frame)
+
                 if args.box_classify and vision is not None:
                     for det in boxes[:4]:
                         crop = crop_for_classifier(frame, det)
+
                         if crop is not None:
                             det.ev_score = vision.predict(crop)[2]
 
-            result = fusion.update(last_vision[2], last_audio[2])
-            if result.command != last_command:
-                controller.send(result.command)
-                last_command = result.command
+            # -------------------------
+            # Sensor fusion
+            # -------------------------
+            result = fusion.update(
+                last_vision[2],
+                last_audio[2],
+            )
 
+            # -------------------------
+            # Controller command + heartbeat
+            # -------------------------
+            now = time.monotonic()
+
+            command_changed = result.command != last_command
+
+            heartbeat_due = (
+                now - last_command_sent_at
+                >= COMMAND_HEARTBEAT_SECONDS
+            )
+
+            if command_changed or heartbeat_due:
+                controller.send(result.command)
+
+                last_command = result.command
+                last_command_sent_at = now
+
+            # -------------------------
+            # CSV logging
+            # -------------------------
             timestamp = time.time()
+
             logger.write(
                 timestamp,
                 last_vision[0],
@@ -166,53 +261,95 @@ def main() -> None:
                 side,
             )
 
-            if frame is not None and (show_window or args.frame_out is not None):
+            # -------------------------
+            # Display and dashboard frame
+            # -------------------------
+            if frame is not None and (
+                show_window or args.frame_out is not None
+            ):
                 view, scale = make_view(frame)
-                draw_boxes(view, boxes, scale, config.fusion.emergency_threshold)
-                draw_overlay(view, last_vision, last_audio, result.emergency_confidence, result.state.value, side)
-                if args.frame_out is not None and time.monotonic() - last_frame_write >= 0.1:
+
+                draw_boxes(
+                    view,
+                    boxes,
+                    scale,
+                    config.fusion.emergency_threshold,
+                )
+
+                draw_overlay(
+                    view,
+                    last_vision,
+                    last_audio,
+                    result.emergency_confidence,
+                    result.state.value,
+                    side,
+                )
+
+                if (
+                    args.frame_out is not None
+                    and time.monotonic() - last_frame_write >= 0.1
+                ):
                     write_frame(view, args.frame_out)
                     last_frame_write = time.monotonic()
+
                 if show_window:
-                    cv2.imshow("Emergency Vehicle Recognition", view)
+                    cv2.imshow(
+                        "Emergency Vehicle Recognition",
+                        view,
+                    )
+
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
-            # A paired audio file advances in real time. Pace recorded video too,
-            # otherwise the video ends before its audio windows are available.
+            # Pace recorded video in real time when requested.
             if video_frame_interval:
                 next_frame_time += video_frame_interval
-                time.sleep(max(0.0, next_frame_time - time.monotonic()))
-                
+
+                time.sleep(
+                    max(0.0, next_frame_time - time.monotonic())
+                )
+
     except KeyboardInterrupt:
         print("Stopped.")
-    
+
     finally:
         audio_source.stop()
+
         if cap is not None:
             cap.release()
+
         logger.close()
         controller.close()
+
         cv2.destroyAllWindows()
 
 
-AUDIO_ONLY_INTERVAL = 0.1  # seconds between fusion updates when there is no camera
-
-
 class AudioSource:
-    def __init__(self, sample_rate: int, window_seconds: float, audio_file: Path | None, device: int | str | None) -> None:
+    def __init__(
+        self,
+        sample_rate: int,
+        window_seconds: float,
+        audio_file: Path | None,
+        device: int | str | None,
+    ) -> None:
         self.sample_rate = sample_rate
         self.window = int(sample_rate * window_seconds)
         self.audio_file = audio_file
         self.device = device
+
         self.queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=2)
+
         self.stream: sd.InputStream | None = None
         self.thread: threading.Thread | None = None
+
         self.stopped = threading.Event()
 
     def start(self) -> None:
         if self.audio_file:
-            self.thread = threading.Thread(target=self._file_loop, daemon=True)
+            self.thread = threading.Thread(
+                target=self._file_loop,
+                daemon=True,
+            )
             self.thread.start()
             return
 
@@ -223,10 +360,12 @@ class AudioSource:
             device=self.device,
             callback=self._mic_callback,
         )
+
         self.stream.start()
 
     def latest(self) -> np.ndarray | None:
         latest = None
+
         while True:
             try:
                 latest = self.queue.get_nowait()
@@ -235,31 +374,54 @@ class AudioSource:
 
     def stop(self) -> None:
         self.stopped.set()
+
         if self.stream:
             self.stream.stop()
             self.stream.close()
 
-    def _mic_callback(self, indata, frames, time_info, status) -> None:
+    def _mic_callback(
+        self,
+        indata,
+        frames,
+        time_info,
+        status,
+    ) -> None:
         if status:
             print(status)
+
         self._put(indata[:, 0].copy())
 
     def _file_loop(self) -> None:
-        audio, sample_rate = sf.read(self.audio_file, dtype="float32")
+        audio, sample_rate = sf.read(
+            self.audio_file,
+            dtype="float32",
+        )
+
         if audio.ndim > 1:
             audio = np.mean(audio, axis=1)
+
         if sample_rate != self.sample_rate:
             import librosa
 
-            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=self.sample_rate)
+            audio = librosa.resample(
+                audio,
+                orig_sr=sample_rate,
+                target_sr=self.sample_rate,
+            )
+
         index = 0
+
         while not self.stopped.is_set():
             chunk = audio[index : index + self.window]
+
             if len(chunk) < self.window:
                 index = 0
                 continue
+
             self._put(chunk.copy())
+
             index += self.window
+
             time.sleep(self.window / self.sample_rate)
 
     def _put(self, chunk: np.ndarray) -> None:
@@ -268,37 +430,72 @@ class AudioSource:
                 self.queue.get_nowait()
             except queue.Empty:
                 pass
+
         self.queue.put_nowait(chunk)
 
 
-def open_camera(video: Path | None, backend: str, camera_index: int, width: int, height: int):
+def open_camera(
+    video: Path | None,
+    backend: str,
+    camera_index: int,
+    width: int,
+    height: int,
+):
     if video is not None:
         cap = cv2.VideoCapture(str(video))
+
     elif backend in {"auto", "picamera2"}:
         try:
             from picamera2 import Picamera2
 
             camera = Picamera2()
-            camera.configure(camera.create_video_configuration(main={"size": (width, height), "format": "BGR888"}))
+
+            camera.configure(
+                camera.create_video_configuration(
+                    main={
+                        "size": (width, height),
+                        "format": "BGR888",
+                    }
+                )
+            )
+
             camera.start()
+
             return PiCameraCapture(camera)
+
         except ImportError:
             if backend == "picamera2":
-                raise SystemExit("Picamera2 is not installed. On Raspberry Pi OS run: sudo apt install python3-picamera2")
+                raise SystemExit(
+                    "Picamera2 is not installed. "
+                    "On Raspberry Pi OS run: "
+                    "sudo apt install python3-picamera2"
+                )
+
         except Exception as error:
             if backend == "picamera2":
-                raise SystemExit(f"Could not start Pi Camera: {error}")
-            print(f"Pi Camera unavailable; trying OpenCV camera: {error}")
+                raise SystemExit(
+                    f"Could not start Pi Camera: {error}"
+                )
+
+            print(
+                "Pi Camera unavailable; trying OpenCV camera: "
+                f"{error}"
+            )
+
         cap = cv2.VideoCapture(camera_index)
+
     else:
         cap = cv2.VideoCapture(camera_index)
+
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
     return cap
 
 
 class PiCameraCapture:
     """cv2.VideoCapture-compatible adapter for Raspberry Pi Camera Module."""
+
     def __init__(self, camera) -> None:
         self.camera = camera
 
@@ -313,32 +510,77 @@ class PiCameraCapture:
 
 
 def make_view(frame, max_width: int = 960):
-    """Downscale a copy of the frame for display. Returns (view, scale)."""
+    """Downscale a copy of the frame. Returns (view, scale)."""
+
     height, width = frame.shape[:2]
+
     scale = min(1.0, max_width / width)
+
     if scale < 1.0:
-        return cv2.resize(frame, (int(width * scale), int(height * scale))), scale
+        return (
+            cv2.resize(
+                frame,
+                (int(width * scale), int(height * scale)),
+            ),
+            scale,
+        )
+
     return frame.copy(), 1.0
 
 
 def write_frame(view, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
     temp = path.with_name(path.stem + ".tmp.jpg")
-    cv2.imwrite(str(temp), view, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+    cv2.imwrite(
+        str(temp),
+        view,
+        [cv2.IMWRITE_JPEG_QUALITY, 80],
+    )
+
     os.replace(temp, path)
 
 
-def draw_overlay(frame, vision, audio, fused: float, state: str, side: str) -> None:
+def draw_overlay(
+    frame,
+    vision,
+    audio,
+    fused: float,
+    state: str,
+    side: str,
+) -> None:
     rows = [
         f"Vision: {vision[0]} ev={float(vision[2] or 0):.2f}",
         f"Audio:  {audio[0]} siren={float(audio[2] or 0):.2f}",
         f"Fused:  {fused:.2f}  State: {state}",
         f"Approach side: {side}",
     ]
-    color = (0, 0, 255) if state != "NORMAL" else (0, 180, 0)
-    cv2.rectangle(frame, (10, 10), (430, 128), (20, 20, 20), -1)
+
+    color = (
+        (0, 0, 255)
+        if state != "NORMAL"
+        else (0, 180, 0)
+    )
+
+    cv2.rectangle(
+        frame,
+        (10, 10),
+        (430, 128),
+        (20, 20, 20),
+        -1,
+    )
+
     for i, text in enumerate(rows):
-        cv2.putText(frame, text, (22, 38 + i * 26), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+        cv2.putText(
+            frame,
+            text,
+            (22, 38 + i * 26),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            color,
+            2,
+        )
 
 
 if __name__ == "__main__":
