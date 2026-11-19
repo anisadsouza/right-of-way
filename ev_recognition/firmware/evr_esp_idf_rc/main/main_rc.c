@@ -278,10 +278,10 @@ static void apply_manual_command(const char *command)
             drive(-160, -160);
         }
         else if (strcmp(command, "LEFT") == 0) {
-            drive(-140, 140);
+            drive(-200, 200);
         }
         else if (strcmp(command, "RIGHT") == 0) {
-            drive(140, -140);
+            drive(200, -200);
         }
         else {
             xSemaphoreGive(control_mutex);
