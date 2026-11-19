@@ -38,3 +38,85 @@ ev_recognition/reports/esc50_v2.csv
 
 ev_recognition/backups/
 ev_recognition/logs/live_frame.jpg
+
+
+# ==============================
+# Project 27 - Generated images
+# ==============================
+
+# Vision dataset images and annotations
+ev_recognition/data/vision/
+ev_recognition/data/images/
+ev_recognition/data/frames/
+ev_recognition/datasets/
+
+# Captured camera images and video
+ev_recognition/captures/
+ev_recognition/captured_images/
+ev_recognition/captured_frames/
+ev_recognition/videos/
+ev_recognition/*.jpg
+ev_recognition/*.jpeg
+ev_recognition/*.png
+ev_recognition/*.mp4
+ev_recognition/*.avi
+
+# Generated image outputs
+ev_recognition/output/
+ev_recognition/outputs/
+ev_recognition/temp/
+ev_recognition/tmp/
+
+# Generated model files
+ev_recognition/models/*.tflite
+ev_recognition/models/*.keras
+ev_recognition/models/*.h5
+ev_recognition/models/*.onnx
+
+# Python and training outputs
+*.pyc
+*.pyo
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Training checkpoints and logs
+ev_recognition/checkpoints/
+ev_recognition/tensorboard/
+ev_recognition/runs/
+ev_recognition/logs/*.csv
+ev_recognition/logs/*.log
+
+# ESP-IDF generated build files
+ev_recognition/firmware/evr_esp_idf/build/
+ev_recognition/firmware/evr_esp_idf_rc/build/
+ev_recognition/firmware/**/sdkconfig
+ev_recognition/firmware/**/dependencies.lock
+
+# OS generated files
+Thumbs.db
+desktop.ini
+
+# Project 27 - local datasets and generated files
+ev_recognition/data/
+ev_recognition/venv/
+
+# Images and videos inside training folders
+ev_recognition/colab_training/**/*.jpg
+ev_recognition/colab_training/**/*.jpeg
+ev_recognition/colab_training/**/*.png
+ev_recognition/colab_training/**/*.webp
+ev_recognition/colab_training/**/*.bmp
+ev_recognition/colab_training/**/*.gif
+ev_recognition/colab_training/**/*.mp4
+ev_recognition/colab_training/**/*.avi
+
+# Generated model files and dataset archives
+ev_recognition/demo_vision.keras
+ev_recognition/demo_vision.tflite
+ev_recognition/demo_scenes.zip
+ev_recognition/right_of_way_training.zip
+
+# Local firmware backups
+ev_recognition/firmware/evr_esp_idf/backup_before_rc/
+ev_recognition/firmware/evr_esp_idf_rc/main/main_before_wifi.c
