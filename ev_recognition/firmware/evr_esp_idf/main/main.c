@@ -155,11 +155,17 @@ static void handle_command(const char *command)
         buzzer_off();  // OFF
         drive(90, 90);
 
-    } else if (strcmp(command, "PULL_RIGHT") == 0) {
+        } else if (strcmp(command, "PULL_RIGHT") == 0) {
         /* Left side faster than right, producing a right arc. */
         set_lights(false, true, true);
-        buzzer_on_for_a_few_seconds();  // ON
-        drive(110, 35);
+        buzzer_on_for_a_few_seconds();
+        drive(140, 70);
+
+    } else if (strcmp(command, "PULL_LEFT") == 0) {
+        /* Right side faster than left, producing a left arc. */
+        set_lights(false, true, true);
+        buzzer_on_for_a_few_seconds();
+        drive(70, 140);
 
     } else if (strcmp(command, "STOP") == 0) {
         set_lights(false, false, true);
