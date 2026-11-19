@@ -272,16 +272,16 @@ static void apply_manual_command(const char *command)
         set_lights(false, false, false);
 
         if (strcmp(command, "FORWARD") == 0) {
-            drive(160, 160);
+            drive(400, 400);
         }
         else if (strcmp(command, "BACKWARD") == 0) {
-            drive(-160, -160);
+            drive(-400, -400);
         }
         else if (strcmp(command, "LEFT") == 0) {
-            drive(-140, 140);
+            drive(-400, 400);
         }
         else if (strcmp(command, "RIGHT") == 0) {
-            drive(140, -140);
+            drive(400, -400);
         }
         else {
             xSemaphoreGive(control_mutex);
