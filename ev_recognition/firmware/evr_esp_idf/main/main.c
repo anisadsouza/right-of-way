@@ -1,3 +1,4 @@
+
 /*
  * Emergency Vehicle Recognition - ESP32 4WD yield controller (native ESP-IDF).
  *
@@ -17,6 +18,8 @@
 #include "driver/ledc.h"
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
 
 #include "pins.h"
 
@@ -28,6 +31,31 @@
 #define LEFT_CHANNEL   LEDC_CHANNEL_0
 #define RIGHT_CHANNEL  LEDC_CHANNEL_1
 #define PWM_MODE       LEDC_LOW_SPEED_MODE
+
+#define BUZZER_DURATION_MS 2000
+
+static TimerHandle_t buzzer_timer = NULL;
+
+static void buzzer_timeout(TimerHandle_t timer)
+{
+    gpio_set_level(PIN_BUZZER, 1);  // HIGH = OFF
+}
+
+static void buzzer_on_for_a_few_seconds(void)
+{
+    xTimerStop(buzzer_timer, 0);
+
+    gpio_set_level(PIN_BUZZER, 0);  // LOW = ON
+
+    xTimerStart(buzzer_timer, 0);
+}
+
+static void buzzer_off(void)
+{
+    xTimerStop(buzzer_timer, 0);
+
+    gpio_set_level(PIN_BUZZER, 1);  // HIGH = OFF
+}
 
 static void reply(const char *text)
 {
@@ -41,10 +69,13 @@ static void init_outputs(void)
         PIN_GREEN_LED, PIN_YELLOW_LED, PIN_RED_LED, PIN_BUZZER,
         PIN_LEFT_IN1, PIN_LEFT_IN2, PIN_RIGHT_IN3, PIN_RIGHT_IN4,
     };
+
     for (size_t i = 0; i < sizeof(outputs) / sizeof(outputs[0]); i++) {
         gpio_reset_pin(outputs[i]);
         gpio_set_direction(outputs[i], GPIO_MODE_OUTPUT);
-        gpio_set_level(outputs[i], 0);
+
+        /* Active-LOW buzzer: HIGH means OFF. */
+        gpio_set_level(outputs[i], outputs[i] == PIN_BUZZER ? 1 : 0);
     }
 
     ledc_timer_config_t timer = {
@@ -116,26 +147,31 @@ static void handle_command(const char *command)
 
     if (strcmp(command, "NORMAL") == 0) {
         set_lights(true, false, false);
-        gpio_set_level(PIN_BUZZER, 0);
+        buzzer_off();  // OFF
         drive(160, 160);
+
     } else if (strcmp(command, "SLOW") == 0) {
         set_lights(false, true, false);
-        gpio_set_level(PIN_BUZZER, 1);
+        buzzer_off();  // OFF
         drive(90, 90);
+
     } else if (strcmp(command, "PULL_RIGHT") == 0) {
         /* Left side faster than right, producing a right arc. */
         set_lights(false, true, true);
-        gpio_set_level(PIN_BUZZER, 1);
+        buzzer_on_for_a_few_seconds();  // ON
         drive(110, 35);
+
     } else if (strcmp(command, "STOP") == 0) {
         set_lights(false, false, true);
-        gpio_set_level(PIN_BUZZER, 1);
+        buzzer_on_for_a_few_seconds();  // ON
         stop_motors();
+
     } else {
         snprintf(response, sizeof(response), "Unknown command: %s", command);
         reply(response);
         return;
     }
+
     snprintf(response, sizeof(response), "OK %s", command);
     reply(response);
 }
@@ -157,8 +193,22 @@ static void init_uart(void)
 void app_main(void)
 {
     esp_log_level_set("*", ESP_LOG_NONE);
+
     init_outputs();
     init_uart();
+
+    buzzer_timer = xTimerCreate(
+    	"buzzer_timer",
+    	pdMS_TO_TICKS(BUZZER_DURATION_MS),
+    	pdFALSE,
+    	NULL,
+    	buzzer_timeout
+    );
+
+    if (buzzer_timer == NULL) {
+    	return;
+    }	
+
     handle_command("STOP");
     reply("EVR ESP32 4WD controller ready");
 
@@ -170,23 +220,30 @@ void app_main(void)
         if (uart_read_bytes(CMD_UART, &byte, 1, portMAX_DELAY) != 1) {
             continue;
         }
+
         if (byte == '\n') {
             line[length] = '\0';
+
             /* Trim trailing carriage return and spaces, then upper-case. */
             while (length > 0 && isspace((unsigned char)line[length - 1])) {
                 line[--length] = '\0';
             }
+
             size_t start = 0;
             while (line[start] != '\0' && isspace((unsigned char)line[start])) {
                 start++;
             }
+
             for (size_t i = start; line[i] != '\0'; i++) {
                 line[i] = (char)toupper((unsigned char)line[i]);
             }
+
             if (line[start] != '\0') {
                 handle_command(&line[start]);
             }
+
             length = 0;
+
         } else if (length < LINE_MAX_LEN - 1) {
             line[length++] = (char)byte;
         }
