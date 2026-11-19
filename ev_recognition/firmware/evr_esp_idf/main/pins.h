@@ -6,7 +6,7 @@
 #define PIN_GREEN_LED   GPIO_NUM_32
 #define PIN_YELLOW_LED  GPIO_NUM_33
 #define PIN_RED_LED     GPIO_NUM_23
-#define PIN_BUZZER      GPIO_NUM_4
+#define PIN_BUZZER      GPIO_NUM_13
 
 /* L298N left pair: OUT1/OUT2. Remove the ENA jumper for PWM control. */
 #define PIN_LEFT_ENABLE   GPIO_NUM_25
